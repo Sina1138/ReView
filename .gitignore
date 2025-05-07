@@ -3,7 +3,7 @@ glimpse/
 data/DISAPERE-main/
 *checkpoints/
 .gradio/
-interface/
+test.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
