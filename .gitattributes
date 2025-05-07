@@ -1,0 +1,2 @@
+data/polarity_scored/*.csv filter=lfs diff=lfs merge=lfs -text
+data/topic_scored/*.csv filter=lfs diff=lfs merge=lfs -text
