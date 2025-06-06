@@ -2,6 +2,7 @@ import pickle
 import pandas as pd
 from pathlib import Path
 import os
+import glob
 
 def process_pickle_results(pickle_path: Path, output_path: Path):
     # === Load Pickle File ===
@@ -53,7 +54,15 @@ if __name__ == "__main__":
     BASE_DIR = Path(__file__).resolve().parent
     
     # Set the path to the pickle file and the output CSV file
-    pickle_file = BASE_DIR / "glimpse" / "output" / "extractive_sentences-_-all_reviews_2017-_-none-_-2025-03-26-18-42-15-_-r3-_-rsa_reranked-google-pegasus-arxiv.pk"
+    # ==== Uncomment the appropriate line below to set the pickle file path ====
+    # pickle_file = BASE_DIR / "glimpse" / "output" / "extractive_sentences-_-all_reviews_2017-_-none-_-2025-05-20-20-22-18-_-r3-_-rsa_reranked-google-pegasus-arxiv.pk"
+    
+    # ==== Find the latest file in the directory and use it instead ====
+    # This assumes the pickle files are stored in the 'glimpse/output' directory
+    list_of_files = glob.glob('./glimpse/output/*.pk')
+    pickle_file = max(list_of_files, key=os.path.getctime)
+    print (f"Using pickle file: {pickle_file}")
+
     output_file = BASE_DIR / "data" / "GLIMPSE_results_from_pk.csv"
     
     process_pickle_results(pickle_file, output_file)
