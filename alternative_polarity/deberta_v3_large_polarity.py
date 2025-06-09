@@ -41,8 +41,14 @@ def predict_polarity(sentences):
     inputs = tokenizer(sentences, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
     with torch.no_grad():
         outputs = model(**inputs)
-        predictions = torch.argmax(outputs.logits, dim=1).cpu().tolist()
-    return predictions
+        logits = outputs.logits
+        temperature = 3.0
+        probs = F.softmax(logits / temperature, dim=-1)
+        # Get probability of positive class
+        polarity_scores = probs[:, 1]
+        # Rescale: 0 → -1 (very negative), 1 → +1 (very positive)
+        polarity_scores = (polarity_scores * 2) - 1
+    return polarity_scores.cpu().tolist()
 
 
 def find_polarity(start_year=2017, end_year=2021):

@@ -2,6 +2,7 @@ import pandas as pd
 import nltk
 import ast
 from pathlib import Path
+from tqdm import tqdm
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -29,7 +30,7 @@ def preprocessed_scores(
 
     scored_reviews = {}
 
-    for _, row in original_df.iterrows():
+    for _, row in tqdm(original_df.iterrows(), total=len(original_df)):
         review_id = row["id"]
         review_text = row["text"]
 

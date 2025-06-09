@@ -388,11 +388,12 @@ with gr.Blocks(title="GLIMPSE") as demo:
                     review_item = list(current_review[i].items())
 
                     if show_polarity:
-                        # Binary color based on polarity
-                        highlighted = [
-                            (sentence, "✅" if metadata.get("polarity") == 1 else "❌")
-                            for sentence, metadata in review_item
-                        ]
+                        highlighted = []
+                        for sentence, metadata in review_item:
+                            polarity = metadata.get("polarity", 0.0)  # Default to neutral if not present
+                            # polarity = polarity * 2 - 1  # Rescale to [-1, 1]
+                            highlighted.append((sentence, polarity))
+                
                     elif show_consensuality:
                         # Gradient color based on consensuality
                         highlighted = [
@@ -443,49 +444,49 @@ with gr.Blocks(title="GLIMPSE") as demo:
             show_legend=True,
             label="Glimpse scores for each sentence in Review 1",
             visible= number_of_displayed_reviews >= 1,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review2 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 2",
             visible= number_of_displayed_reviews >= 2,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review3 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 3",
             visible= number_of_displayed_reviews >= 3,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review4 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 4",
             visible= number_of_displayed_reviews >= 4,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review5 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 5",
             visible= number_of_displayed_reviews >= 5,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review6 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 6",
             visible= number_of_displayed_reviews >= 6,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review7 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 7",
             visible= number_of_displayed_reviews >= 7,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review8 = gr.HighlightedText(
             show_legend=True,
             label="Glimpse scores for each sentence in Review 8",
             visible= number_of_displayed_reviews >= 8,
-            color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
+            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
 
         # Callback functions that update state.
