@@ -35,11 +35,12 @@ dev_ds = Dataset.from_pandas(dev_df)
 test_ds = Dataset.from_pandas(test_df)
 
 # Tokenize
-model_name = "allenai/scibert_scivocab_uncased"
+model_name = "microsoft/deberta-v3-large"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
 def tokenize(batch):
-    return tokenizer(batch["text"], padding="max_length", truncation=True, max_length=256)
+    return tokenizer(batch["text"], padding="max_length", truncation=True, max_length=512)
 
 train_ds = train_ds.map(tokenize, batched=True)
 dev_ds = dev_ds.map(tokenize, batched=True)
@@ -63,12 +64,12 @@ def compute_metrics(eval_pred):
 
 # Training arguments
 args = TrainingArguments(
-    output_dir="./scibert/scibert_polarity/checkpoints",
+    output_dir="./alternative_polarity/checkpoints",
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=2e-5,
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=16,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=8,
     num_train_epochs=4,
     weight_decay=0.01,
     load_best_model_at_end=True,
@@ -93,5 +94,5 @@ results = trainer.evaluate(test_ds)
 print("Test results:", results)
 
 # Save the model and tokenizer
-model.save_pretrained("./scibert/scibert_polarity/final_model")
-tokenizer.save_pretrained("./scibert/scibert_polarity/final_model")
+model.save_pretrained("./alternative_polarity/deberta_v3_large_polarity_final_model")
+tokenizer.save_pretrained("./alternative_polarity/deberta_v3_large_polarity_final_model")

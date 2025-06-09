@@ -71,3 +71,7 @@ trainer.train()
 # Evaluate on test
 results = trainer.evaluate(test_ds)
 print("Test results:", results)
+
+# Save the model and tokenizer
+model.save_pretrained("./scibert/scibert_topic/final-model")
+tokenizer.save_pretrained("./scibert/scibert_topic/final-model")

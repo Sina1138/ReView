@@ -4,8 +4,8 @@ data/DISAPERE-main/
 *checkpoints/
 .gradio/
 test.py
-data/*.csv
-
+data/*
+*final_model/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

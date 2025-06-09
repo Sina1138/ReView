@@ -15,7 +15,7 @@ from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
 
 # === CONFIGURATION ===
 
-MODEL_DIR = BASE_DIR / "scibert" / "scibert_polarity" / "checkpoints" / "checkpoint-988"
+MODEL_DIR = BASE_DIR / "scibert" / "scibert_polarity" / "final_model"
 DATA_DIR = BASE_DIR / "glimpse" / "data" / "processed"
 OUTPUT_DIR = BASE_DIR / "data" / "polarity_scored"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
