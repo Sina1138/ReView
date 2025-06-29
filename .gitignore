@@ -6,6 +6,7 @@ data/DISAPERE-main/
 test.py
 data/
 *final_model/
+alternative_polarity/llama/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

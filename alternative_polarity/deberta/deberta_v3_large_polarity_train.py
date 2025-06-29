@@ -64,7 +64,7 @@ def compute_metrics(eval_pred):
 
 # Training arguments
 args = TrainingArguments(
-    output_dir="./alternative_polarity/checkpoints",
+    output_dir="./alternative_polarity/deberta/checkpoints",
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=2e-5,
@@ -94,5 +94,5 @@ results = trainer.evaluate(test_ds)
 print("Test results:", results)
 
 # Save the model and tokenizer
-model.save_pretrained("./alternative_polarity/deberta_v3_large_polarity_final_model")
-tokenizer.save_pretrained("./alternative_polarity/deberta_v3_large_polarity_final_model")
+model.save_pretrained("./alternative_polarity/deberta/deberta_v3_large_polarity_final_model")
+tokenizer.save_pretrained("./alternative_polarity/deberta/deberta_v3_large_polarity_final_model")

@@ -9,14 +9,14 @@ from torch.nn import functional as F
 
 nltk.download('punkt')
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
 
 # === CONFIGURATION ===
 
-MODEL_DIR = BASE_DIR / "alternative_polarity" / "deberta_v3_large_polarity_final_model"
+MODEL_DIR = BASE_DIR / "alternative_polarity" / "deberta" / "deberta_v3_large_polarity_final_model"
 DATA_DIR = BASE_DIR / "glimpse" / "data" / "processed"
 OUTPUT_DIR = BASE_DIR / "data" / "polarity_scored"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
