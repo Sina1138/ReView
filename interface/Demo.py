@@ -416,8 +416,17 @@ with gr.Blocks(title="GLIMPSE") as demo:
                     review_updates.append(gr.update(visible=True, value=highlighted))
                 else:
                     review_updates.append(gr.update(visible=False, value=""))
+                    
+            # Add the most common and unique sentences
+            if show_consensuality:
+                most_common_visibility = gr.update(visible=show_consensuality, value="")
+                most_unique_visibility = gr.update(visible=show_consensuality, value="")
+            else:
+                most_common_visibility = gr.update(visible=False, value="")
+                most_unique_visibility = gr.update(visible=False, value="")
 
-            return (new_review_id, *review_updates, state)
+            return (new_review_id, *review_updates, state, 
+                    most_common_visibility, most_unique_visibility,)
 
 
         # Precompute the initial outputs so something is shown on load.
@@ -435,56 +444,69 @@ with gr.Blocks(title="GLIMPSE") as demo:
         
         
         with gr.Row():
-            next_button = gr.Button("Next", variant="primary", interactive=True)
             previous_button = gr.Button("Previous", variant="secondary", interactive=True)
+            next_button = gr.Button("Next", variant="primary", interactive=True)
         review_id = gr.Markdown(value=init_display[0], container=True)
 
         # Output display.
+        most_common_sentences = gr.Textbox(
+            lines=2,
+            label="Most Common Sentences",
+            visible=False,
+            show_copy_button=True,
+        )
+        most_unique_sentences = gr.Textbox(
+            lines=2,
+            label="Most Unique Sentences",
+            visible=False,
+            show_copy_button=True,
+        )
+        
         review1 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 1",
+            label="Review 1",
             visible= number_of_displayed_reviews >= 1,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review2 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 2",
+            label="Review 2",
             visible= number_of_displayed_reviews >= 2,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review3 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 3",
+            label="Review 3",
             visible= number_of_displayed_reviews >= 3,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review4 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 4",
+            label="Review 4",
             visible= number_of_displayed_reviews >= 4,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review5 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 5",
+            label="Review 5",
             visible= number_of_displayed_reviews >= 5,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review6 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 6",
+            label="Review 6",
             visible= number_of_displayed_reviews >= 6,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review7 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 7",
+            label="Review 7",
             visible= number_of_displayed_reviews >= 7,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
         review8 = gr.HighlightedText(
             show_legend=True,
-            label="Glimpse scores for each sentence in Review 8",
+            label="Review 8",
             visible= number_of_displayed_reviews >= 8,
             # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
         )
@@ -517,7 +539,7 @@ with gr.Blocks(title="GLIMPSE") as demo:
         score_type.change(
             fn=update_review_display,
             inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state, most_common_sentences, most_unique_sentences]
         )
         next_button.click(
             fn=next_review,
@@ -533,7 +555,7 @@ with gr.Blocks(title="GLIMPSE") as demo:
     demo.load(
         fn=update_review_display,
         inputs=[state, score_type],
-        outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state]
+        outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state, most_common_sentences, most_unique_sentences]
     )
         
                     
