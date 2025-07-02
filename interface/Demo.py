@@ -163,11 +163,271 @@ You can choose between the **Interactive** mode for real-time summarization or t
 
 
 with gr.Blocks(title="GLIMPSE") as demo:
-    gr.Markdown("# GLIMPSE Method Interface")
+    gr.Markdown("# GlimpSys Interface")
     
-    with gr.Tab("Home"):
+    with gr.Tab("Introduction"):
         gr.Markdown(glimpse_description)
+        
+    # -----------------------------------
+    # Pre-processed Tab
+    # -----------------------------------
+    with gr.Tab("Pre-processed Reviews"):
+        # Initialize state for this session.
+        initial_year = 2017
+        initial_scored_reviews = get_preprocessed_scores(initial_year)
+        initial_review_ids = list(initial_scored_reviews.keys())
+        initial_review = initial_scored_reviews[initial_review_ids[0]]
+        number_of_displayed_reviews = len(initial_scored_reviews[initial_review_ids[0]])
+        initial_state = {
+            "year_choice": initial_year,
+            "scored_reviews_for_year": initial_scored_reviews,
+            "review_ids": initial_review_ids,
+            "current_review_index": 0,
+            "current_review": initial_review,
+            "number_of_displayed_reviews": number_of_displayed_reviews,
+        }
+        state = gr.State(initial_state)
+
+        def update_review_display(state, score_type):
+            
+            # First clear all components
+            clear_updates = [gr.update(value=[]) for _ in range(8)]
     
+            review_ids = state["review_ids"]
+            current_index = state["current_review_index"]
+            current_review = state["scored_reviews_for_year"][review_ids[current_index]]
+
+            show_polarity = score_type == "Polarity"
+            show_consensuality = score_type == "Agreements"
+            show_topic = score_type == "Aspect"
+            
+            if show_polarity:
+                color_map = {"➕": "#d4fcd6", "➖": "#fcd6d6"}
+            elif show_topic:
+                color_map = None
+            elif show_consensuality:
+                color_map = None  # show continuous values
+            else:
+                color_map = {}
+
+
+            new_review_id = (
+                f"### Submission Link:\n\n{review_ids[current_index]}<br>"
+                f"(Showing {current_index + 1} of {len(state['review_ids'])} reviews)"
+            )
+
+            number_of_displayed_reviews = len(current_review)
+            review_updates = []
+            consensuality_dict = {}
+
+            for i in range(8):
+                if i < number_of_displayed_reviews:
+                    review_item = list(current_review[i].items())
+
+                    if show_polarity:
+                        highlighted = []
+                        for sentence, metadata in review_item:
+                            polarity = metadata.get("polarity", None)
+                            if polarity == 2:
+                                label = "➕"  # positive
+                            elif polarity == 0:
+                                label = "➖"  # negative
+                            else:
+                                label = None  # ignore neutral (1)
+                            highlighted.append((sentence, label))
+                    elif show_consensuality:
+                        highlighted = []
+                        for sentence, metadata in review_item:
+                            score = metadata.get("consensuality", 0.0)
+                            consensuality_dict[sentence] = score
+                            highlighted.append((sentence, score))
+                    elif show_topic:
+                        highlighted = []
+                        for sentence, metadata in review_item:
+                            topic = metadata.get("topic", None)
+                            if topic != "NONE":
+                                highlighted.append((sentence, topic))
+                            else:
+                                highlighted.append((sentence, None))
+                    else:
+                        highlighted = [
+                            (sentence, None)
+                            for sentence, metadata in review_item
+                        ]
+
+                    review_updates.append(
+                        gr.update(
+                            visible=True,
+                            value=highlighted,
+                            color_map=color_map or {},
+                            show_legend=False,
+                        )
+                    )
+                else:
+                    review_updates.append(
+                        gr.update(
+                            visible=False,
+                            value=None,
+                            color_map={},
+                            show_legend=False
+                        )
+                    )
+
+            # Set most consensual / unique sentences
+            if show_consensuality and consensuality_dict:
+                scores = pd.Series(consensuality_dict)
+                most_common = scores.sort_values(ascending=True).head(3).index.tolist()
+                most_unique = scores.sort_values(ascending=False).head(3).index.tolist()
+                most_common_text = "\n".join(most_common)
+                most_unique_text = "\n".join(most_unique)
+
+                most_common_visibility = gr.update(visible=True, value=most_common_text)
+                most_unique_visibility = gr.update(visible=True, value=most_unique_text)
+            else:
+                most_common_visibility = gr.update(visible=False, value="")
+                most_unique_visibility = gr.update(visible=False, value="")
+
+            return (
+                    new_review_id,
+                    *review_updates,
+                    most_common_visibility,
+                    most_unique_visibility,
+                    state
+                )
+
+
+
+        # Precompute the initial outputs so something is shown on load.
+        init_display = update_review_display(initial_state, score_type="Agreements")
+        # init_display returns: (review_id, review1, review2, review3, review4, review5, review6, review7, review8, state)
+
+        with gr.Row():
+            with gr.Column(scale=1):
+                # Input controls.
+                year = gr.Dropdown(choices=years, label="Select Year", interactive=True, value=initial_year)
+                score_type = gr.Radio(
+                    choices=["Original", "Agreements", "Polarity", "Aspect"],
+                    label="Score Type to Display",
+                    value="Original",
+                    interactive=True
+                )
+                            
+            with gr.Column(scale=1):
+                review_id = gr.Markdown(value=init_display[0], container=True)
+                with gr.Row():
+                    previous_button = gr.Button("Previous", variant="secondary", interactive=True)
+                    next_button = gr.Button("Next", variant="primary", interactive=True)
+
+        # Output display.
+        most_common_sentences = gr.Textbox(
+            lines=4,
+            label="Most Common Sentences",
+            visible=False,
+            show_copy_button=True,
+        )
+        most_unique_sentences = gr.Textbox(
+            lines=4,
+            label="Most Unique Sentences",
+            visible=False,
+            show_copy_button=True,
+        )
+        
+        review1 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 1",
+            visible= number_of_displayed_reviews >= 1,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review2 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 2",
+            visible= number_of_displayed_reviews >= 2,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review3 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 3",
+            visible= number_of_displayed_reviews >= 3,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review4 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 4",
+            visible= number_of_displayed_reviews >= 4,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review5 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 5",
+            visible= number_of_displayed_reviews >= 5,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review6 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 6",
+            visible= number_of_displayed_reviews >= 6,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review7 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 7",
+            visible= number_of_displayed_reviews >= 7,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+        review8 = gr.HighlightedText(
+            show_legend=True,
+            label="Review 8",
+            visible= number_of_displayed_reviews >= 8,
+            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
+        )
+
+        # Callback functions that update state.
+        def year_change(year, state, show_polarity):
+            state["year_choice"] = year
+            state["scored_reviews_for_year"] = get_preprocessed_scores(year)
+            state["review_ids"] = list(state["scored_reviews_for_year"].keys())
+            state["current_review_index"] = 0
+            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][0]]
+            return update_review_display(state, show_polarity)
+
+        def next_review(state, show_polarity):
+            state["current_review_index"] = (state["current_review_index"] + 1) % len(state["review_ids"])
+            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
+            return update_review_display(state, show_polarity)
+
+        def previous_review(state, show_polarity):
+            state["current_review_index"] = (state["current_review_index"] - 1) % len(state["review_ids"])
+            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
+            return update_review_display(state, show_polarity)
+
+        # Hook up the callbacks with the session state.
+        year.change(
+            fn=year_change,
+            inputs=[year, state, score_type],
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+        )
+        score_type.change(
+            fn=update_review_display,
+            inputs=[state, score_type],
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+        )
+        next_button.click(
+            fn=next_review,
+            inputs=[state, score_type],
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+        )
+        previous_button.click(
+            fn=previous_review,
+            inputs=[state, score_type],
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+        )   
+        
+        
+        
+        
+    # -----------------------------------
+    # Interactive Tab
+    # -----------------------------------
     with gr.Tab("Interactive", interactive=True):    
         gr.Markdown("""
             This is an interactive demo of the GLIMPSE Method.\n
@@ -345,219 +605,11 @@ with gr.Blocks(title="GLIMPSE") as demo:
         #     inputs=[review_count],
         #     outputs=[review1_textbox, review2_textbox, review3_textbox]
         # )
-            
-            
-            
-    with gr.Tab("Pre-processed"):
-        # Initialize state for this session.
-        initial_year = 2017
-        initial_scored_reviews = get_preprocessed_scores(initial_year)
-        initial_review_ids = list(initial_scored_reviews.keys())
-        initial_review = initial_scored_reviews[initial_review_ids[0]]
-        number_of_displayed_reviews = len(initial_scored_reviews[initial_review_ids[0]])
-        initial_state = {
-            "year_choice": initial_year,
-            "scored_reviews_for_year": initial_scored_reviews,
-            "review_ids": initial_review_ids,
-            "current_review_index": 0,
-            "current_review": initial_review,
-            "number_of_displayed_reviews": number_of_displayed_reviews,
-        }
-        state = gr.State(initial_state)
-
-        def update_review_display(state, score_type):
-            review_ids = state["review_ids"]
-            current_index = state["current_review_index"]
-            current_review = state["scored_reviews_for_year"][review_ids[current_index]]
-            
-            # Check the given state for the score type to display
-            show_polarity = score_type == "Polarity"
-            show_consensuality = score_type == "Consensuality"
-            show_topic = score_type == "Topic"
-            
-            new_review_id = (
-                f"### Submission Link:\n\n{review_ids[current_index]}<br>"
-                f"(Showing {current_index + 1} of {len(state['review_ids'])} reviews)"
-            )
-            
-            number_of_displayed_reviews = len(current_review)
-            review_updates = []
-
-            for i in range(8):
-                if i < number_of_displayed_reviews:
-                    review_item = list(current_review[i].items())
-
-                    if show_polarity:
-                        highlighted = []
-                        for sentence, metadata in review_item:
-                            polarity = metadata.get("polarity", 0.0)  # Default to neutral if not present
-                            # polarity = polarity * 2 - 1  # Rescale to [-1, 1]
-                            highlighted.append((sentence, polarity))
-                
-                    elif show_consensuality:
-                        # Gradient color based on consensuality
-                        highlighted = [
-                            (sentence, metadata["consensuality"])
-                            for sentence, metadata in review_item
-                        ]
-                    elif show_topic:
-                        # Topic color based on topic
-                        highlighted = [
-                            (sentence, metadata["topic"])
-                            for sentence, metadata in review_item
-                        ]
-                    else:
-                        # No highlighting
-                        highlighted = [
-                            (sentence, None)
-                            for sentence, metadata in review_item
-                        ]
-
-                    review_updates.append(gr.update(visible=True, value=highlighted))
-                else:
-                    review_updates.append(gr.update(visible=False, value=""))
-                    
-            # Add the most common and unique sentences
-            if show_consensuality:
-                most_common_visibility = gr.update(visible=show_consensuality, value="")
-                most_unique_visibility = gr.update(visible=show_consensuality, value="")
-            else:
-                most_common_visibility = gr.update(visible=False, value="")
-                most_unique_visibility = gr.update(visible=False, value="")
-
-            return (new_review_id, *review_updates, state, 
-                    most_common_visibility, most_unique_visibility,)
-
-
-        # Precompute the initial outputs so something is shown on load.
-        init_display = update_review_display(initial_state, score_type="Consensuality")
-        # init_display returns: (review_id, review1, review2, review3, review4, review5, review6, review7, review8, state)
-
-        # Input controls.
-        year = gr.Dropdown(choices=years, label="Select Year", interactive=True, value=initial_year)
-        score_type = gr.Radio(
-            choices=["None", "Consensuality", "Polarity", "Topic"],
-            label="Score Type to Display",
-            value="None",
-            interactive=True
-        )
-        
-        
-        with gr.Row():
-            previous_button = gr.Button("Previous", variant="secondary", interactive=True)
-            next_button = gr.Button("Next", variant="primary", interactive=True)
-        review_id = gr.Markdown(value=init_display[0], container=True)
-
-        # Output display.
-        most_common_sentences = gr.Textbox(
-            lines=2,
-            label="Most Common Sentences",
-            visible=False,
-            show_copy_button=True,
-        )
-        most_unique_sentences = gr.Textbox(
-            lines=2,
-            label="Most Unique Sentences",
-            visible=False,
-            show_copy_button=True,
-        )
-        
-        review1 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 1",
-            visible= number_of_displayed_reviews >= 1,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review2 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 2",
-            visible= number_of_displayed_reviews >= 2,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review3 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 3",
-            visible= number_of_displayed_reviews >= 3,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review4 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 4",
-            visible= number_of_displayed_reviews >= 4,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review5 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 5",
-            visible= number_of_displayed_reviews >= 5,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review6 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 6",
-            visible= number_of_displayed_reviews >= 6,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review7 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 7",
-            visible= number_of_displayed_reviews >= 7,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-        review8 = gr.HighlightedText(
-            show_legend=True,
-            label="Review 8",
-            visible= number_of_displayed_reviews >= 8,
-            # color_map={"✅": "#d4fcd6", "❌": "#fcd6d6"}
-        )
-
-        # Callback functions that update state.
-        def year_change(year, state, show_polarity):
-            state["year_choice"] = year
-            state["scored_reviews_for_year"] = get_preprocessed_scores(year)
-            state["review_ids"] = list(state["scored_reviews_for_year"].keys())
-            state["current_review_index"] = 0
-            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][0]]
-            return update_review_display(state, show_polarity)
-
-        def next_review(state, show_polarity):
-            state["current_review_index"] = (state["current_review_index"] + 1) % len(state["review_ids"])
-            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
-            return update_review_display(state, show_polarity)
-
-        def previous_review(state, show_polarity):
-            state["current_review_index"] = (state["current_review_index"] - 1) % len(state["review_ids"])
-            state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
-            return update_review_display(state, show_polarity)
-
-        # Hook up the callbacks with the session state.
-        year.change(
-            fn=year_change,
-            inputs=[year, state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state]
-        )
-        score_type.change(
-            fn=update_review_display,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state, most_common_sentences, most_unique_sentences]
-        )
-        next_button.click(
-            fn=next_review,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state]
-        )
-        previous_button.click(
-            fn=previous_review,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state]
-        )
         
     demo.load(
         fn=update_review_display,
         inputs=[state, score_type],
-        outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, state, most_common_sentences, most_unique_sentences]
-    )
-        
-                    
+        outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+    )          
 
 demo.launch(share=False)
