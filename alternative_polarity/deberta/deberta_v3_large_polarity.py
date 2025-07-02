@@ -37,18 +37,34 @@ model.to(device)
 #     return sentences 
 
 
+# def predict_polarity(sentences):
+#     inputs = tokenizer(sentences, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+#     with torch.no_grad():
+#         outputs = model(**inputs)
+#         logits = outputs.logits
+#         temperature = 2.7  # Adjust temperature for scaling logits
+#         probs = F.softmax(logits / temperature, dim=-1)
+#         # Get probability of positive class
+#         polarity_scores = probs[:, 1]
+#         # Rescale: 0 → -1 (very negative), 1 → +1 (very positive)
+#         polarity_scores = (polarity_scores * 2) - 1
+#     return polarity_scores.cpu().tolist()
+
 def predict_polarity(sentences):
-    inputs = tokenizer(sentences, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+    inputs = tokenizer(
+        sentences,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=512
+    ).to(device)
+
     with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-        temperature = 3.0
-        probs = F.softmax(logits / temperature, dim=-1)
-        # Get probability of positive class
-        polarity_scores = probs[:, 1]
-        # Rescale: 0 → -1 (very negative), 1 → +1 (very positive)
-        polarity_scores = (polarity_scores * 2) - 1
-    return polarity_scores.cpu().tolist()
+        logits = model(**inputs).logits            # (batch, 2)
+        logit_diff = logits[:,1] - logits[:,0]
+        alpha = 2.1                               # tweak
+        scores = torch.tanh(alpha * logit_diff)   # in [-1,1]
+    return scores.cpu().tolist()
 
 
 def find_polarity(start_year=2017, end_year=2021):

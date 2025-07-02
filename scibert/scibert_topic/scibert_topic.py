@@ -38,14 +38,20 @@ model.to(device)
 
 # === Label map (optional: for human-readable output) ===
 id2label = {
-    0: "asp_substance",
-    1: "asp_clarity",
-    2: "asp_soundness-correctness",
-    3: "asp_originality",
-    4: "asp_impact",
-    5: "asp_comparison",
-    6: "asp_replicability",
-    7: "arg-structuring_summary"
+    # 0: "Evaluative",
+    # 1: "Structuring",
+    # 2: "Request",
+    # 3: "Fact",
+    # 4: "Social",
+    # 5: "Other",
+    0: "Substance",
+    1: "Clarity",
+    2: "Soundness/Correctness",
+    3: "Originality",
+    4: "Motivation/Impact",
+    5: "Meaningful Comparison",
+    6: "Replicability",
+    7: "NONE"  # This is used for sentences that do not match any specific topic
 }
 
 def predict_topic(sentences):

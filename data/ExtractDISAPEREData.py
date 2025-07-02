@@ -21,8 +21,13 @@ output_path = BASE_DIR / "data" / "DISAPERE-main" / "SELFExtractedData"
 #                 for sentence in thread.get("review_sentences", []):
 #                     text = sentence.get("text", "").strip()
 #                     polarity = sentence.get("polarity")
-#                     if text and polarity in ["pol_positive", "pol_negative"]:
-#                         label = 1 if polarity == "pol_positive" else 0
+#                     if text:
+#                         if polarity == "pol_positive":
+#                             label = 2
+#                         elif polarity == "pol_negative":
+#                             label = 0
+#                         else:
+#                             label = 1
 #                         data.append({"text": text, "label": label})
 #     return pd.DataFrame(data)
 
@@ -40,14 +45,19 @@ output_path = BASE_DIR / "data" / "DISAPERE-main" / "SELFExtractedData"
 # 2. EXTRACTING TOPIC SENTENCES FROM DISAPERE DATASET
 #
 # === Topic Label Mapping ===
-# 0: asp_substance              -> Are there substantial experiments and/or detailed analyses?
-# 1: asp_clarity                -> Is the paper clear, well-written and well-structured?
-# 2: asp_soundness-correctness -> Is the approach sound? Are the claims supported?
-# 3: asp_originality            -> Are there new topics, technique, methodology, or insights?
-# 4: asp_impact                 -> Does the paper address an important problem?
-# 5: asp_comparison             -> Are the comparisons to prior work sufficient and fair?
-# 6: asp_replicability          -> Is it easy to reproduce and verify the correctness of the results?
-# 7: arg-structuring_summary    -> Reviewer's summary of the manuscript
+# 1: "Structuring"
+# 0: "Evaluative"
+# 2: "Request"
+# 3: "Fact"
+# 4: "Social"
+# 5: "Other"
+# 6: "Substance"
+# 7: "Clarity"
+# 8: "Soundness/Correctness"
+# 9: "Originality"
+# 10: "Motivation/Impact"
+# 11: "Meaningful Comparison"
+# 12: "Replicability"
 
 # Final topic classes
 topic_classes = [
@@ -58,7 +68,8 @@ topic_classes = [
     "asp_impact",
     "asp_comparison",
     "asp_replicability",
-    "arg-structuring_summary"
+    "None",  # This is used for sentences that do not match any specific topic
+    # "arg-structuring_summary"
 ]
 
 label_map = {label: idx for idx, label in enumerate(topic_classes)}
@@ -72,12 +83,10 @@ def extract_topic_sentences(json_dir):
                 for sentence in thread.get("review_sentences", []):
                     text = sentence.get("text", "").strip()
                     aspect = sentence.get("aspect", "")
-                    fine_action = sentence.get("fine_review_action", "")
+                    # fine_action = sentence.get("fine_review_action", "")
                     
                     # Decide label source
-                    topic = aspect if aspect in label_map else (
-                        fine_action if fine_action in label_map else None
-                    )
+                    topic = aspect if aspect in label_map else "None"
 
                     if text and topic in label_map:
                         label = label_map[topic]

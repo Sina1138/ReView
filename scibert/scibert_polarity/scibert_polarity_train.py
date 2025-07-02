@@ -8,31 +8,33 @@ from torch.nn import functional as F
 
 from transformers import Trainer
 
+# Load data
+train_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_train.csv")
+dev_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_dev.csv")
+test_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_test.csv")
+
+# Convert to HuggingFace Datasets
+train_ds = Dataset.from_pandas(train_df)
+dev_ds = Dataset.from_pandas(dev_df)
+test_ds = Dataset.from_pandas(test_df)
+
+print(train_df['label'].value_counts().sort_index())
+
+# Compute class weights
+label_counts = train_df['label'].value_counts()
+total_samples = len(train_df)
+class_weights = torch.tensor([total_samples / (len(label_counts) * count) for count in label_counts.sort_index().values])
+class_weights = class_weights.to(dtype=torch.float32)
+print("Class weights:", class_weights)
+
 class WeightedTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
         weights = class_weights.to(logits.device)
         loss = F.cross_entropy(logits, labels, weight=weights)
         return (loss, outputs) if return_outputs else loss
-
-
-
-# Load data
-train_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_train.csv")
-dev_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_dev.csv")
-test_df = pd.read_csv("./data/DISAPERE-main/SELFExtractedData/disapere_polarity_test.csv")
-
-# Compute class weights (inverse frequency)
-neg_weight = 1.0
-pos_weight = train_df['label'].value_counts()[0] / train_df['label'].value_counts()[1]
-class_weights = torch.tensor([neg_weight, pos_weight], dtype=torch.float32)
-
-# Convert to HuggingFace Datasets
-train_ds = Dataset.from_pandas(train_df)
-dev_ds = Dataset.from_pandas(dev_df)
-test_ds = Dataset.from_pandas(test_df)
 
 # Tokenize
 model_name = "allenai/scibert_scivocab_uncased"
@@ -51,13 +53,13 @@ dev_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"]
 test_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
 
 # Load model
-model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=3)
 
 # Metrics
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     preds = np.argmax(logits, axis=1)
-    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="binary")
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average="macro")
     acc = accuracy_score(labels, preds)
     return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
 
@@ -65,7 +67,7 @@ def compute_metrics(eval_pred):
 args = TrainingArguments(
     output_dir="./scibert/scibert_polarity/checkpoints",
     eval_strategy="epoch",
-    save_strategy="epoch",
+    save_strategy="no",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=16,

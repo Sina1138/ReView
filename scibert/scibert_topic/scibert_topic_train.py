@@ -30,6 +30,9 @@ train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label
 dev_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
 test_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
 
+print(train_df['label'].value_counts().sort_index())
+
+
 # Load model
 model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=8)
 
@@ -43,9 +46,9 @@ def compute_metrics(eval_pred):
 
 # Training arguments
 args = TrainingArguments(
-    output_dir="./scibert/scibert-topic",
+    output_dir="./scibert/scibert_topic/checkpoints",
     eval_strategy="epoch",
-    save_strategy="epoch",
+    save_strategy="no",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=16,
@@ -73,5 +76,5 @@ results = trainer.evaluate(test_ds)
 print("Test results:", results)
 
 # Save the model and tokenizer
-model.save_pretrained("./scibert/scibert_topic/final-model")
-tokenizer.save_pretrained("./scibert/scibert_topic/final-model")
+model.save_pretrained("./scibert/scibert_topic/final_model")
+tokenizer.save_pretrained("./scibert/scibert_topic/final_model")
