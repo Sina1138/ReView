@@ -67,7 +67,7 @@ def compute_metrics(eval_pred):
 args = TrainingArguments(
     output_dir="./scibert/scibert_polarity/checkpoints",
     eval_strategy="epoch",
-    save_strategy="no",
+    save_strategy="epoch",
     learning_rate=2e-5,
     per_device_train_batch_size=8,
     per_device_eval_batch_size=16,

@@ -16,7 +16,7 @@ from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
 
 # === CONFIGURATION ===
 
-MODEL_DIR = BASE_DIR / "alternative_polarity" / "deberta" / "deberta_v3_large_polarity_final_model"
+MODEL_DIR = BASE_DIR / "alternative_polarity" / "deberta" / "deberta_v3_base_polarity_final_model"
 DATA_DIR = BASE_DIR / "glimpse" / "data" / "processed"
 OUTPUT_DIR = BASE_DIR / "data" / "polarity_scored"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
