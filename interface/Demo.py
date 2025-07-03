@@ -1,6 +1,4 @@
 import math
-import numpy as np
-import seaborn as sns
 
 import sys, os.path
 
@@ -10,9 +8,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from glimpse.rsasumm.rsa_reranker import RSAReranking
 import gradio as gr
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
-import seaborn as sns
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from scored_reviews_builder import load_scored_reviews
 from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
@@ -34,10 +30,22 @@ def get_preprocessed_scores(year):
 # Interactive Tab
 # -----------------------------------
 
-RSA_model = "facebook/bart-large-cnn"
+# RSA_model = "facebook/bart-large-cnn"
+RSA_model = "sshleifer/distilbart-cnn-12-3"
 
 model = AutoModelForSeq2SeqLM.from_pretrained(RSA_model)
 tokenizer = AutoTokenizer.from_pretrained(RSA_model)
+
+# Define the manual color map for topics
+topic_color_map = {
+    "Substance": "#cce0ff",             # lighter blue
+    "Clarity": "#e6ee9c",               # lighter yellow-green
+    "Soundness/Correctness": "#ffcccc", # lighter red
+    "Originality": "#d1c4e9",           # lighter purple
+    "Motivation/Impact": "#b2ebf2",     # lighter teal
+    "Meaningful Comparison": "#fff9c4", # lighter yellow
+    "Replicability": "#c8e6c9",         # lighter green
+}
 
 
 # GLIMPSE Home/Description Page
@@ -69,14 +77,11 @@ EXAMPLES = [
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
     "The paper gives really interesting insights on the topic of transfer learning. It is not well presented and lack experiments. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
 ]
-    
-def amplify(score, power=0.5, scale=1.0):
-    return min(1.0, scale * (score ** power))
 
 # Function to summarize the input texts using the RSAReranking model in interactive mode
 def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
     
-    print(focus, mode, rationality, iterations)
+    # print(focus, mode, rationality, iterations)
     
     # get sentences for each text
     text2_sentences = glimpse_tokenizer(text2)
@@ -208,7 +213,7 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
     def highlight_reviews(text_sentences, consensuality_scores, threshold_common=0.0, threshold_unique=0.0):
         highlighted = []
         for sentence in text_sentences:
-            print(f"Processing sentence: {sentence}", "score:", consensuality_scores.loc[sentence])
+            # print(f"Processing sentence: {sentence}", "score:", consensuality_scores.loc[sentence])
             score = consensuality_scores.loc[sentence]
             score = score*2 if score > 0 else score  # amplify unique scores for better visibility
             
@@ -235,7 +240,7 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
     text_2_topic = [(s, topic_map[s]) for s in text2_sentences]
     text_3_topic = [(s, topic_map[s]) for s in text3_sentences]
     
-    print(type(text_1_consensuality))
+    # print(type(text_1_consensuality))
     return (
         # text_1_summaries, text_2_summaries, text_3_summaries,
         # text_1_consensuality, text_2_consensuality, text_3_consensuality,
@@ -275,12 +280,6 @@ with gr.Blocks(title="GlimpSys") as demo:
         state = gr.State(initial_state)
 
         def update_review_display(state, score_type):
-        
-            # Debugging statement to check the score_type
-            # print(f"Score type: {score_type}")
-
-            # First clear all components
-            clear_updates = [gr.update(value=[]) for _ in range(8)]
 
             review_ids = state["review_ids"]
             current_index = state["current_review_index"]
@@ -289,15 +288,20 @@ with gr.Blocks(title="GlimpSys") as demo:
             show_polarity = score_type == "Polarity"
             show_consensuality = score_type == "Agreement"
             show_topic = score_type == "Topic"
-
+            
+            
             if show_polarity:
                 color_map = {"➕": "#d4fcd6", "➖": "#fcd6d6"}
+                legend = False
             elif show_topic:
-                color_map = None
+                color_map = topic_color_map  # No color map for topics
+                legend = False
             elif show_consensuality:
-                color_map = None  # show continuous values
+                color_map = None  # Continuous scale, no predefined colors
+                legend = True
             else:
-                color_map = {}
+                color_map = {}  # Default to empty map
+                legend = False
 
             new_review_id = (
                 f"### Submission Link:\n\n{review_ids[current_index]}<br>"
@@ -327,11 +331,13 @@ with gr.Blocks(title="GlimpSys") as demo:
                         highlighted = []
                         for sentence, metadata in review_item:
                             score = metadata.get("consensuality", 0.0)
-                            
+                            score = score * 2 -1  # Normalize to [-1, 1]
+                            score = score/2.5 if score > 0 else score  # Amplify unique scores for better visibility
                             # score *= 1.5  # Amplify unique scores for better visibility
                             
                             consensuality_dict[sentence] = score
                             highlighted.append((sentence, score))
+                        
                     elif show_topic:
                         highlighted = []
                         for sentence, metadata in review_item:
@@ -350,17 +356,19 @@ with gr.Blocks(title="GlimpSys") as demo:
                         gr.update(
                             visible=True,
                             value=highlighted,
-                            color_map=color_map or {},
-                            show_legend=True if show_consensuality else False,
+                            color_map=color_map,
+                            show_legend=legend,
+                            key=f"updated_{score_type}_{i}"
                         )
                     )
                 else:
                     review_updates.append(
                         gr.update(
                             visible=False,
-                            value=None,
-                            color_map={},
-                            show_legend=False
+                            value=[],
+                            show_legend=False,
+                            color_map=color_map,
+                            key=f"updated_{score_type}_{i}"
                         )
                     )
 
@@ -378,14 +386,33 @@ with gr.Blocks(title="GlimpSys") as demo:
                 # Debugging statements to check visibility settings
                 # print("Hiding most common and unique sentences")
 
-                most_common_visibility = gr.update(visible=False, value="")
-                most_unique_visibility = gr.update(visible=False, value="")
+                most_common_visibility = gr.update(visible=False, value=[])
+                most_unique_visibility = gr.update(visible=False, value=[])
+                
+            # update topic color map
+            if show_topic:
+                topic_color_map_visibility = gr.update(
+                    visible=True,
+                    color_map=topic_color_map,
+                    value=[
+                        ("", "Substance"),
+                        ("", "Clarity"),
+                        ("", "Soundness/Correctness"),
+                        ("", "Originality"),
+                        ("", "Motivation/Impact"),
+                        ("", "Meaningful Comparison"),
+                        ("", "Replicability"),
+                    ]
+                )
+            else:
+                topic_color_map_visibility = gr.update(visible=False, value=[])
 
             return (
                 new_review_id,
                 *review_updates,
                 most_common_visibility,
                 most_unique_visibility,
+                topic_color_map_visibility,
                 state
             )
 
@@ -396,6 +423,14 @@ with gr.Blocks(title="GlimpSys") as demo:
         # init_display returns: (review_id, review1, review2, review3, review4, review5, review6, review7, review8, state)
 
         with gr.Row():
+            
+            with gr.Column(scale=1):
+                review_id = gr.Markdown(value=init_display[0], container=True)
+                with gr.Row():
+                    previous_button = gr.Button("Previous", variant="secondary", interactive=True)
+                    next_button = gr.Button("Next", variant="primary", interactive=True)
+                    
+                    
             with gr.Column(scale=1):
                 # Input controls.
                 year = gr.Dropdown(choices=years, label="Select Year", interactive=True, value=initial_year)
@@ -405,116 +440,126 @@ with gr.Blocks(title="GlimpSys") as demo:
                     value="Original",
                     interactive=True
                 )
-                            
-            with gr.Column(scale=1):
-                review_id = gr.Markdown(value=init_display[0], container=True)
-                with gr.Row():
-                    previous_button = gr.Button("Previous", variant="secondary", interactive=True)
-                    next_button = gr.Button("Next", variant="primary", interactive=True)
 
         # Output display.
         with gr.Row():
             most_common_sentences = gr.Textbox(
             lines=8,
-            label="Most Common Sentences",
+            label="Most Common Opinions",
             visible=False,
             value=[]
         )
             most_unique_sentences = gr.Textbox(
             lines=8,
-            label="Most Unique Sentences",
+            label="Most Divergent Opinions",
             visible=False,
             value=[]
         )
         
-        review1 = gr.HighlightedText(
+        # Add a new textbox for topic labels and colors
+        topic_text_box = gr.HighlightedText(
+            label="Topic Labels (Color-Coded)",
+            visible=False,
+            value=[],
             show_legend=True,
+        )
+        
+        review1 = gr.HighlightedText(
+            show_legend=False,
             label="Review 1",
             visible= number_of_displayed_reviews >= 1,
+            key="initial_review1",
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review2 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 2",
             visible= number_of_displayed_reviews >= 2,
+            key="initial_review2"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review3 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 3",
             visible= number_of_displayed_reviews >= 3,
+            key="initial_review3"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review4 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 4",
             visible= number_of_displayed_reviews >= 4,
+            key="initial_review4"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review5 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 5",
             visible= number_of_displayed_reviews >= 5,
+            key="initial_review5"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review6 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 6",
             visible= number_of_displayed_reviews >= 6,
+            key="initial_review6"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review7 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 7",
             visible= number_of_displayed_reviews >= 7,
+            key="initial_review7"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
         review8 = gr.HighlightedText(
-            show_legend=True,
+            show_legend=False,
             label="Review 8",
             visible= number_of_displayed_reviews >= 8,
+            key="initial_review8"
             # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
         )
 
         # Callback functions that update state.
-        def year_change(year, state, show_polarity):
+        def year_change(year, state, score_type):
             state["year_choice"] = year
             state["scored_reviews_for_year"] = get_preprocessed_scores(year)
             state["review_ids"] = list(state["scored_reviews_for_year"].keys())
             state["current_review_index"] = 0
             state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][0]]
-            return update_review_display(state, show_polarity)
+            return update_review_display(state, score_type)
 
-        def next_review(state, show_polarity):
+        def next_review(state, score_type):
             state["current_review_index"] = (state["current_review_index"] + 1) % len(state["review_ids"])
             state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
-            return update_review_display(state, show_polarity)
+            return update_review_display(state, score_type)
 
-        def previous_review(state, show_polarity):
+        def previous_review(state, score_type):
             state["current_review_index"] = (state["current_review_index"] - 1) % len(state["review_ids"])
             state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][state["current_review_index"]]]
-            return update_review_display(state, show_polarity)
+            return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
         year.change(
             fn=year_change,
             inputs=[year, state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
         )
         score_type.change(
             fn=update_review_display,
             inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
         )
         next_button.click(
             fn=next_review,
             inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
         )
         previous_button.click(
             fn=previous_review,
             inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
         )   
         
         
@@ -573,44 +618,47 @@ with gr.Blocks(title="GlimpSys") as demo:
                     
                 with gr.Row():
                     unique_sentences = gr.Textbox(
-                        lines=6, label="Most unique sentences", visible=True, value=None, container=True
+                        lines=6, label="Most Divergent Opinions", visible=True, value=None, container=True
                     )
                     common_sentences = gr.Textbox(
-                        lines=6, label="Most common sentences", visible=True, value=None, container=True
+                        lines=6, label="Most Common Opinions", visible=True, value=None, container=True
                     )
                 
                 uniqueness_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Input 1", visible=True, value=None,
+                    show_legend=True, label="Agreement in Review 1", visible=True, value=None,
                 )
                 uniqueness_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Input 2", visible=True, value=None,
+                    show_legend=True, label="Agreement in Review 2", visible=True, value=None,
                 )
                 uniqueness_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Input 3", visible=True, value=None,
+                    show_legend=True, label="Agreement in Review 3", visible=True, value=None,
                 )
                 
                 
                 polarity_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Input 1", visible=False, value=None,
+                    show_legend=True, label="Polarity in Review 1", visible=False, value=None,
                     color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
                 polarity_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Input 2", visible=False, value=None,
+                    show_legend=True, label="Polarity in Review 2", visible=False, value=None,
                     color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
                 polarity_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Input 3", visible=False, value=None,
+                    show_legend=True, label="Polarity in Review 3", visible=False, value=None,
                     color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
                 
                 aspect_score_text1 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Input 1", visible=False, value=None,
+                    show_legend=False, label="Topic in Review 1", visible=False, value=None,
+                    color_map = topic_color_map
                 )
                 aspect_score_text2 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Input 2", visible=False, value=None,
+                    show_legend=False, label="Topic in Review 2", visible=False, value=None,
+                    color_map = topic_color_map
                 )
                 aspect_score_text3 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Input 3", visible=False, value=None,
+                    show_legend=False, label="Topic in Review 3", visible=False, value=None,
+                    color_map = topic_color_map
                 )
                 
                 
@@ -720,7 +768,7 @@ with gr.Blocks(title="GlimpSys") as demo:
     demo.load(
         fn=update_review_display,
         inputs=[state, score_type],
-        outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, state]
+            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
     )          
 
 demo.launch(share=False)
