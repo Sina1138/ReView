@@ -15,7 +15,7 @@ dev_ds = Dataset.from_pandas(dev_df)
 test_ds = Dataset.from_pandas(test_df)
 
 # Tokenize
-model_name = "allenai/scibert_scivocab_uncased"
+model_name = "microsoft/deberta-v3-base"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 def tokenize(batch):
@@ -46,7 +46,7 @@ def compute_metrics(eval_pred):
 
 # Training arguments
 args = TrainingArguments(
-    output_dir="./scibert/scibert_topic/checkpoints",
+    output_dir="./alternative_topic/deberta/checkpoints",
     eval_strategy="epoch",
     save_strategy="epoch",
     learning_rate=2e-5,
@@ -76,5 +76,5 @@ results = trainer.evaluate(test_ds)
 print("Test results:", results)
 
 # Save the model and tokenizer
-model.save_pretrained("./scibert/scibert_topic/final_model")
-tokenizer.save_pretrained("./scibert/scibert_topic/final_model")
+model.save_pretrained("./alternative_topic/deberta/final_model")
+tokenizer.save_pretrained("./alternative_topic/deberta/final_model")
