@@ -3,17 +3,20 @@ import numpy as np
 import seaborn as sns
 
 import sys, os.path
+
+import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 from glimpse.rsasumm.rsa_reranker import RSAReranking
 import gradio as gr
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import seaborn as sns
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from scored_reviews_builder import load_scored_reviews
 from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
+# from scibert.scibert_polarity.scibert_polarity import predict_polarity
 
 # Load scored reviews
 years, all_scored_reviews_df = load_scored_reviews()
@@ -31,21 +34,47 @@ def get_preprocessed_scores(year):
 # Interactive Tab
 # -----------------------------------
 
-MODEL = "facebook/bart-large-cnn"
+RSA_model = "facebook/bart-large-cnn"
 
-model = AutoModelForSeq2SeqLM.from_pretrained(MODEL)
-tokenizer = AutoTokenizer.from_pretrained(MODEL)
+model = AutoModelForSeq2SeqLM.from_pretrained(RSA_model)
+tokenizer = AutoTokenizer.from_pretrained(RSA_model)
 
+
+# GLIMPSE Home/Description Page
+glimpse_description = """
+# GLIMPSE: Pragmatically Informative Multi-Document Summarization of Scholarly Reviews
+
+GLIMPSE is a summarization tool designed to assist **area chairs** and **researchers** in efficiently analyzing and synthesizing scholarly peer reviews. Utilizing the **Rational Speech Act (RSA)** framework, GLIMPSE identifies both **common themes** and **unique perspectives** across multiple reviews, ensuring a comprehensive overview of the evaluation landscape.
+
+Unlike traditional summarization methods that focus on consensus opinions, GLIMPSE emphasizes **both alignment and divergence** in reviewer feedback. This approach provides a **balanced and transparent representation** of the review content, supporting informed decision-making processes.
+
+---
+
+## **Key Features**
+- **Discriminative Summarization:** Highlights both shared insights and unique arguments across reviews.  
+- **RSA-Based Scoring:** Prioritizes key statements based on informativeness and uniqueness metrics.  
+- **Balanced Summaries:** Ensures clarity and coverage of diverse reviewer perspectives.  
+- **Traceability and Transparency:** Maintains clear attribution of summarized points to their original sources.  
+
+GLIMPSE is designed to **streamline the review synthesis process**, offering an effective and reliable method for extracting meaningful insights from complex review datasets.
+
+---
+
+For more information and to begin using GLIMPSE, please proceed with the interface.  
+You can choose between the **Interactive** mode for real-time summarization or the **Pre-processed** mode for batch processing of review data.
+"""
 
 EXAMPLES = [
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. I believe the authors missed Jane and al 2021. In addition, I think, there is a mistake in the math.",
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
     "The paper gives really interesting insights on the topic of transfer learning. It is not well presented and lack experiments. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
 ]
+    
+def amplify(score, power=0.5, scale=1.0):
+    return min(1.0, scale * (score ** power))
 
-
-
-def summarize(text1, text2, text3, focus, mode, rationality, iterations=2):
+# Function to summarize the input texts using the RSAReranking model in interactive mode
+def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
     
     print(focus, mode, rationality, iterations)
     
@@ -61,6 +90,63 @@ def summarize(text1, text2, text3, focus, mode, rationality, iterations=2):
     text3_sentences = [sentence for sentence in text3_sentences if sentence != ""]
 
     sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+    
+    # Load polarity model and tokenizer (SciBERT)
+    polarity_model_path = "scibert/scibert_polarity/final_model"
+    polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_path)
+    polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_path)
+    polarity_model.eval()
+    polarity_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    polarity_model.to(polarity_device)
+
+    def predict_polarity(sent_list):
+        inputs = polarity_tokenizer(
+            sent_list, return_tensors="pt", padding=True, truncation=True, max_length=512
+        ).to(polarity_device)
+        with torch.no_grad():
+            logits = polarity_model(**inputs).logits
+            preds = torch.argmax(logits, dim=1).cpu().tolist()
+        emoji_map = {0: "➖", 1: None, 2: "➕"}
+        return dict(zip(sent_list, [emoji_map[p] for p in preds]))
+
+
+    # Run polarity prediction
+    polarity_map = predict_polarity(sentences)
+
+
+    # Load topic model and tokenizer (SciBERT)
+    topic_model_path = "scibert/scibert_topic/final_model"
+    topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_path)
+    topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_path)
+    topic_model.eval()
+    topic_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    topic_model.to(topic_device)
+    
+    def predict_topic(sent_list):
+        inputs = topic_tokenizer(
+            sent_list, return_tensors="pt", padding=True, truncation=True, max_length=512
+        ).to(topic_device)
+        with torch.no_grad():
+            logits = topic_model(**inputs).logits
+            preds = torch.argmax(logits, dim=1).cpu().tolist()
+        
+        # Topic ID to label and emoji
+        id2label = {
+            0: "Substance",
+            1: "Clarity",
+            2: "Correctness",
+            3: "Originality",
+            4: "Impact",
+            5: "Comparison",
+            6: "Replicability",
+            7: None  # This is used for sentences that do not match any specific topic,
+        }
+        return dict(zip(sent_list, [id2label[p] for p in preds]))
+    
+    # Run topic prediction
+    topic_map = predict_topic(sentences)
+    
+
 
     rsa_reranker = RSAReranking(
         model,
@@ -100,7 +186,6 @@ def summarize(text1, text2, text3, focus, mode, rationality, iterations=2):
 
     # normalize consensuality scores between -1 and 1
     consensuality_scores = (consensuality_scores - (consensuality_scores.max() - consensuality_scores.min()) / 2) / (consensuality_scores.max() - consensuality_scores.min()) / 2
-    consensuality_scores_01 = (consensuality_scores - consensuality_scores.min()) / (consensuality_scores.max() - consensuality_scores.min())
 
     # get most and least consensual sentences
     # most consensual --> most common; least consensual --> most unique
@@ -119,50 +204,51 @@ def summarize(text1, text2, text3, focus, mode, rationality, iterations=2):
     text_2_consensuality = [(sentence, text_2_consensuality[sentence]) for sentence in text2_sentences]
     text_3_consensuality = [(sentence, text_3_consensuality[sentence]) for sentence in text3_sentences]
 
-    text_1_consensuality_ = consensuality_scores_01.loc[text1_sentences]
-    text_2_consensuality_ = consensuality_scores_01.loc[text2_sentences]
-    text_3_consensuality_ = consensuality_scores_01.loc[text3_sentences]
 
-    text_1_consensuality_ = [(sentence, text_1_consensuality_[sentence]) for sentence in text1_sentences]
-    text_2_consensuality_ = [(sentence, text_2_consensuality_[sentence]) for sentence in text2_sentences]
-    text_3_consensuality_ = [(sentence, text_3_consensuality_[sentence]) for sentence in text3_sentences]
+    def highlight_reviews(text_sentences, consensuality_scores, threshold_common=0.0, threshold_unique=0.0):
+        highlighted = []
+        for sentence in text_sentences:
+            print(f"Processing sentence: {sentence}", "score:", consensuality_scores.loc[sentence])
+            score = consensuality_scores.loc[sentence]
+            score = score*2 if score > 0 else score  # amplify unique scores for better visibility
+            
+            # common sentences --> positive consensuality scores
+            # unique sentences --> negative consensuality scores
+            
+            score *= -1 # invert the score for highlighting
+            
+            highlighted.append((sentence, score))
+        return highlighted
 
-
-    #for text in text_1_summaries: print(text)
-    #for text in text_1_consensuality: print(text)
-    # print("Most consensual sentences: ", most_consensual)
-    # print(text_1_consensuality)
+    # Apply highlighting to each review
+    text_1_agreement = highlight_reviews(text1_sentences, consensuality_scores)
+    text_2_agreement = highlight_reviews(text2_sentences, consensuality_scores)
+    text_3_agreement = highlight_reviews(text3_sentences, consensuality_scores)
+    
+    # Add polarity outputs
+    text_1_polarity = [(s, polarity_map[s]) for s in text1_sentences]
+    text_2_polarity = [(s, polarity_map[s]) for s in text2_sentences]
+    text_3_polarity = [(s, polarity_map[s]) for s in text3_sentences]
+    
+    # Add topic outputs
+    text_1_topic = [(s, topic_map[s]) for s in text1_sentences]
+    text_2_topic = [(s, topic_map[s]) for s in text2_sentences]
+    text_3_topic = [(s, topic_map[s]) for s in text3_sentences]
     
     print(type(text_1_consensuality))
-    return text_1_summaries, text_2_summaries, text_3_summaries, text_1_consensuality, text_2_consensuality, text_3_consensuality, most_consensual, least_consensual
+    return (
+        # text_1_summaries, text_2_summaries, text_3_summaries,
+        # text_1_consensuality, text_2_consensuality, text_3_consensuality,
+        text_1_agreement, text_2_agreement, text_3_agreement,
+        most_consensual, least_consensual,
+        text_1_polarity, text_2_polarity, text_3_polarity,
+        text_1_topic, text_2_topic, text_3_topic,
+    )
 
 
-# GLIMPSE Home/Description Page
-glimpse_description = """
-# GLIMPSE: Pragmatically Informative Multi-Document Summarization of Scholarly Reviews
-
-GLIMPSE is a summarization tool designed to assist **area chairs** and **researchers** in efficiently analyzing and synthesizing scholarly peer reviews. Utilizing the **Rational Speech Act (RSA)** framework, GLIMPSE identifies both **common themes** and **unique perspectives** across multiple reviews, ensuring a comprehensive overview of the evaluation landscape.
-
-Unlike traditional summarization methods that focus on consensus opinions, GLIMPSE emphasizes **both alignment and divergence** in reviewer feedback. This approach provides a **balanced and transparent representation** of the review content, supporting informed decision-making processes.
-
----
-
-## **Key Features**
-- **Discriminative Summarization:** Highlights both shared insights and unique arguments across reviews.  
-- **RSA-Based Scoring:** Prioritizes key statements based on informativeness and uniqueness metrics.  
-- **Balanced Summaries:** Ensures clarity and coverage of diverse reviewer perspectives.  
-- **Traceability and Transparency:** Maintains clear attribution of summarized points to their original sources.  
-
-GLIMPSE is designed to **streamline the review synthesis process**, offering an effective and reliable method for extracting meaningful insights from complex review datasets.
-
----
-
-For more information and to begin using GLIMPSE, please proceed with the interface.  
-You can choose between the **Interactive** mode for real-time summarization or the **Pre-processed** mode for batch processing of review data.
-"""
 
 
-with gr.Blocks(title="GLIMPSE") as demo:
+with gr.Blocks(title="GlimpSys") as demo:
     gr.Markdown("# GlimpSys Interface")
     
     with gr.Tab("Introduction"):
@@ -189,18 +275,21 @@ with gr.Blocks(title="GLIMPSE") as demo:
         state = gr.State(initial_state)
 
         def update_review_display(state, score_type):
-            
+        
+            # Debugging statement to check the score_type
+            # print(f"Score type: {score_type}")
+
             # First clear all components
             clear_updates = [gr.update(value=[]) for _ in range(8)]
-    
+
             review_ids = state["review_ids"]
             current_index = state["current_review_index"]
             current_review = state["scored_reviews_for_year"][review_ids[current_index]]
 
             show_polarity = score_type == "Polarity"
-            show_consensuality = score_type == "Agreements"
-            show_topic = score_type == "Aspect"
-            
+            show_consensuality = score_type == "Agreement"
+            show_topic = score_type == "Topic"
+
             if show_polarity:
                 color_map = {"➕": "#d4fcd6", "➖": "#fcd6d6"}
             elif show_topic:
@@ -209,7 +298,6 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 color_map = None  # show continuous values
             else:
                 color_map = {}
-
 
             new_review_id = (
                 f"### Submission Link:\n\n{review_ids[current_index]}<br>"
@@ -239,6 +327,9 @@ with gr.Blocks(title="GLIMPSE") as demo:
                         highlighted = []
                         for sentence, metadata in review_item:
                             score = metadata.get("consensuality", 0.0)
+                            
+                            # score *= 1.5  # Amplify unique scores for better visibility
+                            
                             consensuality_dict[sentence] = score
                             highlighted.append((sentence, score))
                     elif show_topic:
@@ -260,7 +351,7 @@ with gr.Blocks(title="GLIMPSE") as demo:
                             visible=True,
                             value=highlighted,
                             color_map=color_map or {},
-                            show_legend=False,
+                            show_legend=True if show_consensuality else False,
                         )
                     )
                 else:
@@ -284,21 +375,24 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 most_common_visibility = gr.update(visible=True, value=most_common_text)
                 most_unique_visibility = gr.update(visible=True, value=most_unique_text)
             else:
+                # Debugging statements to check visibility settings
+                # print("Hiding most common and unique sentences")
+
                 most_common_visibility = gr.update(visible=False, value="")
                 most_unique_visibility = gr.update(visible=False, value="")
 
             return (
-                    new_review_id,
-                    *review_updates,
-                    most_common_visibility,
-                    most_unique_visibility,
-                    state
-                )
+                new_review_id,
+                *review_updates,
+                most_common_visibility,
+                most_unique_visibility,
+                state
+            )
 
 
 
         # Precompute the initial outputs so something is shown on load.
-        init_display = update_review_display(initial_state, score_type="Agreements")
+        init_display = update_review_display(initial_state, score_type="Original")
         # init_display returns: (review_id, review1, review2, review3, review4, review5, review6, review7, review8, state)
 
         with gr.Row():
@@ -306,7 +400,7 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 # Input controls.
                 year = gr.Dropdown(choices=years, label="Select Year", interactive=True, value=initial_year)
                 score_type = gr.Radio(
-                    choices=["Original", "Agreements", "Polarity", "Aspect"],
+                    choices=["Original", "Agreement", "Polarity", "Topic"],
                     label="Score Type to Display",
                     value="Original",
                     interactive=True
@@ -319,17 +413,18 @@ with gr.Blocks(title="GLIMPSE") as demo:
                     next_button = gr.Button("Next", variant="primary", interactive=True)
 
         # Output display.
-        most_common_sentences = gr.Textbox(
-            lines=4,
+        with gr.Row():
+            most_common_sentences = gr.Textbox(
+            lines=8,
             label="Most Common Sentences",
             visible=False,
-            show_copy_button=True,
+            value=[]
         )
-        most_unique_sentences = gr.Textbox(
-            lines=4,
+            most_unique_sentences = gr.Textbox(
+            lines=8,
             label="Most Unique Sentences",
             visible=False,
-            show_copy_button=True,
+            value=[]
         )
         
         review1 = gr.HighlightedText(
@@ -428,15 +523,7 @@ with gr.Blocks(title="GLIMPSE") as demo:
     # -----------------------------------
     # Interactive Tab
     # -----------------------------------
-    with gr.Tab("Interactive", interactive=True):    
-        gr.Markdown("""
-            This is an interactive demo of the GLIMPSE Method.\n
-            After pressing the 'Process' button, the model will generate the requested outputs based on the selected parameters.  
-            The 'Output Mode' parameter allows you to choose between in-line highlighting and summary generation.  
-            - In case of **In-Line Highlighting** mode, the 'Focus on' parameter allows you to choose between uniqueness and commonality.  
-            - For **Summary Generation**, you can choose between having extractive or abstractive (TBA) summaries.
-        """)
-        
+    with gr.Tab("Interactive", interactive=True):            
         with gr.Row():
             with gr.Column():
                 
@@ -444,9 +531,9 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 
                 # review_count = gr.Slider(minimum=1, maximum=3, step=1, value=3, label="Number of Reviews", interactive=True)
 
-                review1_textbox = gr.Textbox(lines=8, value=EXAMPLES[0], label="Review 1", interactive=True)
-                review2_textbox = gr.Textbox(lines=8, value=EXAMPLES[1], label="Review 2", interactive=True)
-                review3_textbox = gr.Textbox(lines=8, value=EXAMPLES[2], label="Review 3", interactive=True)
+                review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="Review 1", interactive=True)
+                review2_textbox = gr.Textbox(lines=5, value=EXAMPLES[1], label="Review 2", interactive=True)
+                review3_textbox = gr.Textbox(lines=5, value=EXAMPLES[2], label="Review 3", interactive=True)
                 
                 with gr.Row():
                     submit_button = gr.Button("Process", variant="primary", interactive=True)
@@ -463,10 +550,11 @@ with gr.Blocks(title="GLIMPSE") as demo:
                     choices=[("In-line Highlighting", "highlight"), ("Generate Summaries", "summary")],
                     value="highlight",
                     label="Output Mode:",
-                    interactive=True
+                    interactive=False,
+                    visible=False  # Initially hidden, will be shown based on mode selection
                 )
                 focus_radio = gr.Radio(
-                    choices=[("Uniqueness", "unique"), ("Commonality", "common")],
+                    choices=[("Agreement", "unique"), "Polarity", "Topic",],
                     value="unique",
                     label="Focus on:",
                     interactive=True
@@ -481,35 +569,51 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 
                 # Fixed rationality (3.0) and iterations (2) to be consistent with the compute_rsa.py script
                 #iterations_slider = gr.Slider(minimum=1, maximum=10, step=1, value=2, label="Iterations", interactive=False, visible=False)
-                rationality_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.1, value=2.0, label="Rationality", interactive=False, visible=False)
+                # rationality_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.1, value=2.0, label="Rationality", interactive=False, visible=False)
                     
-                    
+                with gr.Row():
+                    unique_sentences = gr.Textbox(
+                        lines=6, label="Most unique sentences", visible=True, value=None, container=True
+                    )
+                    common_sentences = gr.Textbox(
+                        lines=6, label="Most common sentences", visible=True, value=None, container=True
+                    )
+                
                 uniqueness_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Uniqueness scores for each sentence in Review 1", visible=True, value=None,
+                    show_legend=True, label="Agreement in Input 1", visible=True, value=None,
                 )
                 uniqueness_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Uniqueness scores for each sentence in Review 2", visible=True, value=None,
+                    show_legend=True, label="Agreement in Input 2", visible=True, value=None,
                 )
                 uniqueness_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Uniqueness scores for each sentence in Review 3", visible=True, value=None,
+                    show_legend=True, label="Agreement in Input 3", visible=True, value=None,
                 )
-                consensuality_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Commonality scores for each sentence in Review 1", visible=False, value=None,
+                
+                
+                polarity_score_text1 = gr.HighlightedText(
+                    show_legend=True, label="Polarity in Input 1", visible=False, value=None,
+                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
-                consensuality_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Commonality scores for each sentence in Review 2", visible=False, value=None,
+                polarity_score_text2 = gr.HighlightedText(
+                    show_legend=True, label="Polarity in Input 2", visible=False, value=None,
+                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
-                consensuality_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Commonality score for each sentence in Review 3", visible=False, value=None,
+                polarity_score_text3 = gr.HighlightedText(
+                    show_legend=True, label="Polarity in Input 3", visible=False, value=None,
+                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
                 )
-                with gr.Column():
-                    most_unique_sentences = gr.Textbox(
-                        lines=8, label="Most unique sentences", visible=False, show_copy_button=True, container=True
-                    )
-                with gr.Column():
-                    most_consensual_sentences = gr.Textbox(
-                        lines=8, label="Most common sentences", visible=False, show_copy_button=True, container=True
-                    )
+                
+                aspect_score_text1 = gr.HighlightedText(
+                    show_legend=False, label="Topic in Input 1", visible=False, value=None,
+                )
+                aspect_score_text2 = gr.HighlightedText(
+                    show_legend=False, label="Topic in Input 2", visible=False, value=None,
+                )
+                aspect_score_text3 = gr.HighlightedText(
+                    show_legend=False, label="Topic in Input 3", visible=False, value=None,
+                )
+                
+                
 
             
             # Connect summarize function to submit button
@@ -517,12 +621,14 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 fn=summarize,
                 inputs=[
                     review1_textbox, review2_textbox, review3_textbox,
-                    focus_radio, mode_radio, rationality_slider
+                    focus_radio, mode_radio
                 ],
                 outputs=[
                     uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
-                    most_consensual_sentences, most_unique_sentences, 
+                    common_sentences, unique_sentences,
+                    polarity_score_text1, polarity_score_text2, polarity_score_text3,
+                    aspect_score_text1, aspect_score_text2, aspect_score_text3 
+                    
                 ]
             )
             
@@ -533,43 +639,47 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 outputs=[
                     review1_textbox, review2_textbox, review3_textbox,
                     uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
-                    most_consensual_sentences, most_unique_sentences
+                    common_sentences, unique_sentences
                 ]
             )
             
             # Update visibility of generation_method_radio based on mode_radio value
-            def toggle_generation_method(mode):
-                if mode == "summary":
-                    return gr.update(visible=True), gr.update(visible=False) # show generation method radio, hide focus radio
-                else:
-                    return gr.update(visible=False), gr.update(visible=True) # show focus radio, hide generation method radio
+            # def toggle_generation_method(mode):
+            #     if mode == "summary":
+            #         return gr.update(visible=True), gr.update(visible=False) # show generation method radio, hide focus radio
+            #     else:
+            #         return gr.update(visible=False), gr.update(visible=True) # show focus radio, hide generation method radio
             
-            mode_radio.change(
-                fn=toggle_generation_method,
-                inputs=mode_radio,
-                outputs=[generation_method_radio, focus_radio]
-            )
+            # mode_radio.change(
+            #     fn=toggle_generation_method,
+            #     inputs=mode_radio,
+            #     outputs=[generation_method_radio, focus_radio]
+            # )
             
             # Update visibility of output textboxes based on mode_radio and focus_radio values
             def toggle_output_textboxes(mode, focus):
                 if mode == "highlight" and focus == "unique":
                     return (
                         gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), # in-line uniqueness highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line commonality highlights
-                        gr.update(visible=False), gr.update(visible=False) # summary highlights
+                        gr.update(visible=True), gr.update(visible=True), # summary highlights
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # polarity highlights
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False) # aspect highlights
                     )
-                elif mode == "highlight" and focus == "common":
+
+                elif focus == "Polarity":
                     return (
                         gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line uniqueness highlights
-                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), # in-line commonality highlights
-                        gr.update(visible=False), gr.update(visible=False) # summary highlights
+                        gr.update(visible=False), gr.update(visible=False), # summary highlights
+                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), # polarity highlights
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False) # aspect highlights
                     )
-                elif mode == "summary":
+                
+                elif focus == "Topic":
                     return (
                         gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line uniqueness highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line commonality highlights
-                        gr.update(visible=True), gr.update(visible=True) # summary highlights
+                        gr.update(visible=False), gr.update(visible=False), # summary highlights
+                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # polarity highlights
+                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True) # aspect highlights
                     )
             
             focus_radio.change(
@@ -577,19 +687,20 @@ with gr.Blocks(title="GLIMPSE") as demo:
                 inputs=[mode_radio, focus_radio],
                 outputs=[
                     uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
-                    most_consensual_sentences, most_unique_sentences
+                    common_sentences, unique_sentences,
+                    polarity_score_text1, polarity_score_text2, polarity_score_text3,
+                    aspect_score_text1, aspect_score_text2, aspect_score_text3
                 ]
             )
-            mode_radio.change(
-                fn=toggle_output_textboxes,
-                inputs=[mode_radio, focus_radio],
-                outputs=[
-                    uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
-                    most_consensual_sentences, most_unique_sentences
-                ]
-            )
+            # mode_radio.change(
+            #     fn=toggle_output_textboxes,
+            #     inputs=[mode_radio, focus_radio],
+            #     outputs=[
+            #         uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
+            #         consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
+            #         most_consensual_sentences, most_unique_sentences
+            #     ]
+            # )
            
         # TODO: Configure the slider for the number of review boxes 
         
