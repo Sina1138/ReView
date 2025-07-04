@@ -331,9 +331,9 @@ with gr.Blocks(title="GlimpSys") as demo:
                         highlighted = []
                         for sentence, metadata in review_item:
                             score = metadata.get("consensuality", 0.0)
-                            score = score * 2 -1  # Normalize to [-1, 1]
+                            score = score * 2 - 1  # Normalize to [-1, 1]
                             score = score/2.5 if score > 0 else score  # Amplify unique scores for better visibility
-                            # score *= 1.5  # Amplify unique scores for better visibility
+                            score *= -1  # Invert the score for highlighting
                             
                             consensuality_dict[sentence] = score
                             highlighted.append((sentence, score))
@@ -375,8 +375,8 @@ with gr.Blocks(title="GlimpSys") as demo:
             # Set most consensual / unique sentences
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
-                most_common = scores.sort_values(ascending=True).head(3).index.tolist()
-                most_unique = scores.sort_values(ascending=False).head(3).index.tolist()
+                most_unique = scores.sort_values(ascending=True).head(3).index.tolist()
+                most_common = scores.sort_values(ascending=False).head(3).index.tolist()
                 most_common_text = "\n".join(most_common)
                 most_unique_text = "\n".join(most_unique)
 
