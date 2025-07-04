@@ -320,9 +320,9 @@ with gr.Blocks(title="GlimpSys") as demo:
                         highlighted = []
                         for sentence, metadata in review_item:
                             polarity = metadata.get("polarity", None)
-                            if polarity == 2:
+                            if polarity >= 0.995:
                                 label = "➕"  # positive
-                            elif polarity == 0:
+                            elif polarity <= -0.99:
                                 label = "➖"  # negative
                             else:
                                 label = None  # ignore neutral (1)
@@ -771,4 +771,4 @@ with gr.Blocks(title="GlimpSys") as demo:
             outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
     )          
 
-demo.launch(share=False)
+demo.launch(share=True)
