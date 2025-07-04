@@ -3,6 +3,7 @@ import nltk
 import ast
 from pathlib import Path
 from tqdm import tqdm
+import json
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -42,7 +43,12 @@ def preprocessed_scores(
 
         # Get consensuality scores
         consensuality_scores_str = scored_df[scored_df["id"] == review_id]["consensuality_scores"].iloc[0]
-        consensuality_scores_dict = ast.literal_eval(consensuality_scores_str)
+        try:
+            consensuality_scores_dict = json.loads(consensuality_scores_str)
+        except Exception as e:
+            print(f"Error parsing consensuality scores for ID {review_id}: {e}")
+            print("Problematic string:", consensuality_scores_str)
+            continue  # skip this problematic entry
 
         # Get polarity scores
         polarity_rows = polarity_df[polarity_df["id"] == review_id]
@@ -73,7 +79,7 @@ def save_all_scored_reviews(
         start_year: int = 2017,
         end_year: int = 2021,
         input_dir: Path = BASE_DIR / "glimpse" / "data" / "processed",
-        scored_csv_path: Path = BASE_DIR / "data" / "GLIMPSE_results_from_pk.csv",
+        scored_csv_dir: Path = BASE_DIR / "data",
         polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
         topic_dir: Path = BASE_DIR / "data" / "topic_scored",
         output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews.csv",
@@ -87,6 +93,7 @@ def save_all_scored_reviews(
             original_csv_path = input_dir / f"all_reviews_{year}.csv"
             polarity_csv_path = polarity_dir / f"polarity_scored_reviews_{year}.csv"
             topic_csv_path = topic_dir / f"topic_scored_reviews_{year}.csv"
+            scored_csv_path = scored_csv_dir / f"GLIMPSE_results_{year}.csv"
             scored_reviews = preprocessed_scores(
                 original_csv_path,
                 scored_csv_path,

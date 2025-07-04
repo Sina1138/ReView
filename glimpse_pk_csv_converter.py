@@ -3,6 +3,8 @@ import pandas as pd
 from pathlib import Path
 import os
 import glob
+import re
+import json
 
 def process_pickle_results(pickle_path: Path, output_path: Path):
     # === Load Pickle File ===
@@ -14,7 +16,7 @@ def process_pickle_results(pickle_path: Path, output_path: Path):
     rsa_iterations = data.get('metadata/rsa_iterations')
     results = data.get('results')
 
-    print(f"Reranking model: {reranking_model}, RSA iterations: {rsa_iterations}")
+    # print(f"Reranking model: {reranking_model}, RSA iterations: {rsa_iterations}")
 
     # === Validate Results ===
     if not isinstance(results, list):
@@ -23,24 +25,33 @@ def process_pickle_results(pickle_path: Path, output_path: Path):
     # === Process and Flatten Results ===
     csv_data = []
     for index, result in enumerate(results):
+        # row = {
+        #     'index': index,
+        #     'id': str(result.get('id')[0]),
+        #     'consensuality_scores': result.get('consensuality_scores').to_dict()
+        #         if isinstance(result.get('consensuality_scores'), pd.Series) else None,
+
+        #     # Optional fields — uncomment as needed
+        #     # 'best_base': result.get('best_base').tolist() if isinstance(result.get('best_base'), np.ndarray) else None,
+        #     # 'best_rsa': result.get('best_rsa').tolist() if isinstance(result.get('best_rsa'), np.ndarray) else None,
+        #     # 'speaker_df': result.get('speaker_df').to_json() if isinstance(result.get('speaker_df'), pd.DataFrame) else None,
+        #     # 'listener_df': result.get('listener_df').to_json() if isinstance(result.get('listener_df'), pd.DataFrame) else None,
+        #     # 'initial_listener': result.get('initial_listener').to_json() if isinstance(result.get('initial_listener'), pd.DataFrame) else None,
+        #     # 'language_model_proba_df': result.get('language_model_proba_df').to_json() if isinstance(result.get('language_model_proba_df'), pd.DataFrame) else None,
+        #     # 'initial_consensuality_scores': result.get('initial_consensuality_scores').to_dict() if isinstance(result.get('initial_consensuality_scores'), pd.Series) else None,
+        #     # 'gold': result.get('gold'),
+        #     # 'rationality': result.get('rationality'),
+        #     # 'text_candidates': result.get('text_candidates').to_json() if isinstance(result.get('text_candidates'), pd.DataFrame) else None,
+        # }
+        
+        
         row = {
             'index': index,
             'id': str(result.get('id')[0]),
-            'consensuality_scores': result.get('consensuality_scores').to_dict()
+            'consensuality_scores': json.dumps(result.get('consensuality_scores').to_dict())
                 if isinstance(result.get('consensuality_scores'), pd.Series) else None,
-
-            # Optional fields — uncomment as needed
-            # 'best_base': result.get('best_base').tolist() if isinstance(result.get('best_base'), np.ndarray) else None,
-            # 'best_rsa': result.get('best_rsa').tolist() if isinstance(result.get('best_rsa'), np.ndarray) else None,
-            # 'speaker_df': result.get('speaker_df').to_json() if isinstance(result.get('speaker_df'), pd.DataFrame) else None,
-            # 'listener_df': result.get('listener_df').to_json() if isinstance(result.get('listener_df'), pd.DataFrame) else None,
-            # 'initial_listener': result.get('initial_listener').to_json() if isinstance(result.get('initial_listener'), pd.DataFrame) else None,
-            # 'language_model_proba_df': result.get('language_model_proba_df').to_json() if isinstance(result.get('language_model_proba_df'), pd.DataFrame) else None,
-            # 'initial_consensuality_scores': result.get('initial_consensuality_scores').to_dict() if isinstance(result.get('initial_consensuality_scores'), pd.Series) else None,
-            # 'gold': result.get('gold'),
-            # 'rationality': result.get('rationality'),
-            # 'text_candidates': result.get('text_candidates').to_json() if isinstance(result.get('text_candidates'), pd.DataFrame) else None,
         }
+
         csv_data.append(row)
 
     # === Save to CSV ===
@@ -59,10 +70,23 @@ if __name__ == "__main__":
     
     # ==== Find the latest file in the directory and use it instead ====
     # This assumes the pickle files are stored in the 'glimpse/output' directory
-    list_of_files = glob.glob('./glimpse/output/*.pk')
-    pickle_file = max(list_of_files, key=os.path.getctime)
-    print (f"Using pickle file: {pickle_file}")
+    # list_of_files = glob.glob('./glimpse/output/*.pk')
+    # pickle_file = max(list_of_files, key=os.path.getctime)
+    # print (f"Using pickle file: {pickle_file}")
 
-    output_file = BASE_DIR / "data" / "GLIMPSE_results_from_pk.csv"
+    # output_file = BASE_DIR / "data" / "GLIMPSE_results_from_pk.csv"
     
-    process_pickle_results(pickle_file, output_file)
+    # process_pickle_results(pickle_file, output_file)
+
+    output_dir = BASE_DIR / "data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    pickle_files = sorted(glob.glob('./glimpse/output/*.pk'), key=os.path.getctime)
+
+    for pickle_file in pickle_files:
+        year_match = re.search(r'(\d{4})', os.path.basename(pickle_file))
+        year_tag = year_match.group(1) if year_match else 'unknown_year'
+        output_file = output_dir / f"GLIMPSE_results_{year_tag}.csv"
+
+        print(f"Using pickle file: {pickle_file}, saving as {output_file}")
+        process_pickle_results(Path(pickle_file), output_file)
