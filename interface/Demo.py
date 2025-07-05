@@ -50,27 +50,53 @@ topic_color_map = {
 
 # GLIMPSE Home/Description Page
 glimpse_description = """
-# GLIMPSE: Pragmatically Informative Multi-Document Summarization of Scholarly Reviews
+# ReView: A Tool for Visualizing and Analyzing Scientific Reviews
 
-GLIMPSE is a summarization tool designed to assist **area chairs** and **researchers** in efficiently analyzing and synthesizing scholarly peer reviews. Utilizing the **Rational Speech Act (RSA)** framework, GLIMPSE identifies both **common themes** and **unique perspectives** across multiple reviews, ensuring a comprehensive overview of the evaluation landscape.
+## Overview
+ReView is a visualization tool designed to assist **area chairs** and **researchers** in efficiently analyzing scholarly reviews. The interface offers two main ways to explore scholarly reviews:
+- Pre-Processed Reviews: Explore real peer reviews from ICLR (2017–2021) with structured visualizations of sentiment, topics, and reviewer agreement.
+- Interactive Tab: Enter your own reviews and view them analyzed in real time using the same NLP-powered highlighting options.
 
-Unlike traditional summarization methods that focus on consensus opinions, GLIMPSE emphasizes **both alignment and divergence** in reviewer feedback. This approach provides a **balanced and transparent representation** of the review content, supporting informed decision-making processes.
+All reviews are shown in their original, unaltered form, with visual overlays to help identify key insights such as disagreements, sentiment and common themes—reducing cognitive load and scrolling effort.
 
 ---
-
 ## **Key Features**
-- **Discriminative Summarization:** Highlights both shared insights and unique arguments across reviews.  
-- **RSA-Based Scoring:** Prioritizes key statements based on informativeness and uniqueness metrics.  
-- **Balanced Summaries:** Ensures clarity and coverage of diverse reviewer perspectives.  
-- **Traceability and Transparency:** Maintains clear attribution of summarized points to their original sources.  
-
-GLIMPSE is designed to **streamline the review synthesis process**, offering an effective and reliable method for extracting meaningful insights from complex review datasets.
+- *Traceability and Transparency:* The tool preserves the original text of each review and overlays highlights for key aspects (e.g., sentiment, topic, agreement), allowing area chairs to trace back every insight to its source without modifying or summarizing the content.
+- *Structured Overview*: All reviews are displayed in one interface and with radio buttons, one can navigate from one highlighting option to the other.
+- *Interactive*: The tool allows users to input their own reviews and, within seconds, view them annotated with highlighted aspects
+---
+## **Highlighting Options**
+- *Agreement:* Identifies both shared and conflicting points across reviews, helping to surface consensus and disagreement.
+- *Polarity:* Highlights positive and negative sentiments within the reviews to reveal tone and stance.
+- *Topic:* Organizes the review sentences by their discussed topics, ensuring coverage of diverse reviewer perspectives and improving clarity. 
 
 ---
 
-For more information and to begin using GLIMPSE, please proceed with the interface.  
-You can choose between the **Interactive** mode for real-time summarization or the **Pre-processed** mode for batch processing of review data.
+### How to Use ReView
+
+ReView offers two main ways to explore peer reviews: using pre-processed reviews or by entering your own.
+
+#### 🗂️ Pre-Processed Reviews Tab
+
+Use this tab to explore reviews from ICLR (2017–2021):
+
+1. **Select a conference year** from the dropdown menu on the right.
+2. **Navigate between submissions** using the *Next* and *Previous* buttons on the left.
+3. **Choose a highlighting view** using the radio buttons:
+   - **Original**: Displays unmodified review text.
+   - **Agreement**: Highlights consensus points in **red** and disagreements in **purple**.
+   - **Polarity**: Highlights **positive** sentiment in **green** and **negative** sentiment in **red**.
+   - **Topic**: Highlights comments by discussion topic using color-coded labels.
+
+#### ✍️ Interactive Tab
+
+Use this tab to analyze your own review text:
+
+1. **Enter up to three reviews** in the input fields labeled *Review 1*, *Review 2*, and *Review 3*.
+2. **Click "Process"** to analyze the input (average processing time: ~42 seconds).
+3. **Explore the results** using the same highlighting options as above (Agreement, Polarity, Topic).
 """
+
 
 EXAMPLES = [
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. I believe the authors missed Jane and al 2021. In addition, I think, there is a mistake in the math.",
@@ -253,8 +279,8 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
 
 
 
-with gr.Blocks(title="GlimpSys") as demo:
-    gr.Markdown("# GlimpSys Interface")
+with gr.Blocks(title="ReView") as demo:
+    # gr.Markdown("# ReView Interface")
     
     with gr.Tab("Introduction"):
         gr.Markdown(glimpse_description)
@@ -771,4 +797,4 @@ with gr.Blocks(title="GlimpSys") as demo:
             outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
     )          
 
-demo.launch(share=True)
+demo.launch(share=False)
