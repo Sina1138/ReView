@@ -172,7 +172,7 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
         tokenizer,
         candidates=sentences,
         source_texts=[text1, text2, text3],
-        device="cpu",
+        device="cuda" if torch.cuda.is_available() else "cpu",
         rationality=rationality,
     )
     (
