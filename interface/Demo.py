@@ -51,14 +51,11 @@ topic_color_map = {
 # GLIMPSE Home/Description Page
 glimpse_description = """
 # ReView: A Tool for Visualizing and Analyzing Scientific Reviews
-
-## Overview
+## **Overview**
 ReView is a visualization tool designed to assist **area chairs** and **researchers** in efficiently analyzing scholarly reviews. The interface offers two main ways to explore scholarly reviews:
 - Pre-Processed Reviews: Explore real peer reviews from ICLR (2017–2021) with structured visualizations of sentiment, topics, and reviewer agreement.
 - Interactive Tab: Enter your own reviews and view them analyzed in real time using the same NLP-powered highlighting options.
-
 All reviews are shown in their original, unaltered form, with visual overlays to help identify key insights such as disagreements, sentiment and common themes—reducing cognitive load and scrolling effort.
-
 ---
 ## **Key Features**
 - *Traceability and Transparency:* The tool preserves the original text of each review and overlays highlights for key aspects (e.g., sentiment, topic, agreement), allowing area chairs to trace back every insight to its source without modifying or summarizing the content.
@@ -69,17 +66,11 @@ All reviews are shown in their original, unaltered form, with visual overlays to
 - *Agreement:* Identifies both shared and conflicting points across reviews, helping to surface consensus and disagreement.
 - *Polarity:* Highlights positive and negative sentiments within the reviews to reveal tone and stance.
 - *Topic:* Organizes the review sentences by their discussed topics, ensuring coverage of diverse reviewer perspectives and improving clarity. 
-
 ---
-
 ### How to Use ReView
-
 ReView offers two main ways to explore peer reviews: using pre-processed reviews or by entering your own.
-
 #### 🗂️ Pre-Processed Reviews Tab
-
 Use this tab to explore reviews from ICLR (2017–2021):
-
 1. **Select a conference year** from the dropdown menu on the right.
 2. **Navigate between submissions** using the *Next* and *Previous* buttons on the left.
 3. **Choose a highlighting view** using the radio buttons:
@@ -87,11 +78,8 @@ Use this tab to explore reviews from ICLR (2017–2021):
    - **Agreement**: Highlights consensus points in **red** and disagreements in **purple**.
    - **Polarity**: Highlights **positive** sentiment in **green** and **negative** sentiment in **red**.
    - **Topic**: Highlights comments by discussion topic using color-coded labels.
-
 #### ✍️ Interactive Tab
-
 Use this tab to analyze your own review text:
-
 1. **Enter up to three reviews** in the input fields labeled *Review 1*, *Review 2*, and *Review 3*.
 2. **Click "Process"** to analyze the input (average processing time: ~42 seconds).
 3. **Explore the results** using the same highlighting options as above (Agreement, Polarity, Topic).
@@ -123,7 +111,7 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
     sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
     
     # Load polarity model and tokenizer (SciBERT)
-    polarity_model_path = "scibert/scibert_polarity/final_model"
+    polarity_model_path = "Sina1138/Scibert_polarity_Review"
     polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_path)
     polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_path)
     polarity_model.eval()
@@ -146,7 +134,7 @@ def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
 
 
     # Load topic model and tokenizer (SciBERT)
-    topic_model_path = "scibert/scibert_topic/final_model"
+    topic_model_path = "Sina1138/SciDeberta_Review"
     topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_path)
     topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_path)
     topic_model.eval()
