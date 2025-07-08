@@ -48,6 +48,7 @@ def process_pickle_results(pickle_path: Path, output_path: Path):
         row = {
             'index': index,
             'id': str(result.get('id')[0]),
+            'gold': result.get('gold'),
             'consensuality_scores': json.dumps(result.get('consensuality_scores').to_dict())
                 if isinstance(result.get('consensuality_scores'), pd.Series) else None,
         }
@@ -65,28 +66,14 @@ if __name__ == "__main__":
     BASE_DIR = Path(__file__).resolve().parent
     
     # Set the path to the pickle file and the output CSV file
-    # ==== Uncomment the appropriate line below to set the pickle file path ====
-    # pickle_file = BASE_DIR / "glimpse" / "output" / "extractive_sentences-_-all_reviews_2017-_-none-_-2025-05-20-20-22-18-_-r3-_-rsa_reranked-google-pegasus-arxiv.pk"
+    pickle_file = BASE_DIR / "glimpse" / "output" / "extractive_sentences-_-all_reviews_2017-_-none-_-2025-05-20-20-22-18-_-r3-_-rsa_reranked-google-pegasus-arxiv.pk"
     
-    # ==== Find the latest file in the directory and use it instead ====
-    # This assumes the pickle files are stored in the 'glimpse/output' directory
-    # list_of_files = glob.glob('./glimpse/output/*.pk')
-    # pickle_file = max(list_of_files, key=os.path.getctime)
-    # print (f"Using pickle file: {pickle_file}")
-
-    # output_file = BASE_DIR / "data" / "GLIMPSE_results_from_pk.csv"
-    
-    # process_pickle_results(pickle_file, output_file)
-
     output_dir = BASE_DIR / "data"
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    pickle_files = sorted(glob.glob('./glimpse/output/*.pk'), key=os.path.getctime)
-
-    for pickle_file in pickle_files:
-        year_match = re.search(r'(\d{4})', os.path.basename(pickle_file))
-        year_tag = year_match.group(1) if year_match else 'unknown_year'
-        output_file = output_dir / f"GLIMPSE_results_{year_tag}.csv"
-
-        print(f"Using pickle file: {pickle_file}, saving as {output_file}")
-        process_pickle_results(Path(pickle_file), output_file)
+    
+    output_file = BASE_DIR / "data" / "GLIMPSE_results_from_pk_pegasus.csv"
+    
+    print(f"Processing pickle file: {pickle_file}")
+    process_pickle_results(pickle_file, output_file)
+    
+    

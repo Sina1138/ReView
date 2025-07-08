@@ -115,18 +115,19 @@ def save_all_scored_reviews(
 
 def load_scored_reviews(csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews.csv") -> tuple:
     df = pd.read_csv(csv_path)
-    df["scored_dict"] = df["scored_dict"].apply(ast.literal_eval)
+    tqdm.pandas(desc="Parsing scored_dict")
+    df["scored_dict"] = df["scored_dict"].progress_apply(ast.literal_eval)
     years = df["year"].tolist()
-    
     return years, df
 
 
 if __name__ == "__main__":
-    save_all_scored_reviews()
+    # save_all_scored_reviews()
     years, all_scored_reviews_df = load_scored_reviews()
+    print (years)
     
     # Debugging sample output
-    sample_year = 2017
+    sample_year = 2021
 
     sample_df = all_scored_reviews_df[all_scored_reviews_df["year"] == sample_year]
     review_dict = sample_df["scored_dict"].iloc[0]

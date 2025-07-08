@@ -1,0 +1,3 @@
+[submodule "glimpse/glimpse-mds"]
+	path = glimpse/glimpse-mds
+	url = https://github.com/icannos/glimpse-mds.git
