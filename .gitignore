@@ -5,10 +5,11 @@ data/DISAPERE-main/
 .gradio/
 test.py
 data/*
-# final_model/
+*final_model/
 alternative_polarity/llama/
 !data/ExtractDISAPEREData.py
 !data/preprocessed_scored_reviews.csv
+*.git_OLD/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
