@@ -23,6 +23,12 @@ conda create -n ReView python=3.10
 conda activate ReView 
 ```
 
+- In the next step, make sure you have git-lfs package and install git lfs, since it is used in this repo for the preprocessed dataset:
+``` bash
+conda install git-lfs
+git lfs install 
+```
+
 - Finally, all remaining required packages could be installed with the requirements file:
 
 ``` bash
