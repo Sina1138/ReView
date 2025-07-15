@@ -2,14 +2,14 @@
 This is the repository of ReView: A Tool for Visualizing and Analyzing Scientific Reviews. [Code](https://github.com/sina1138/glimpse-ui) | [Hugging Face Spaces](https://huggingface.co/spaces/Sina1138/ReView)
 <!-- [Paper]() | -->
 
-## Cloning this repository
+<!-- ## Cloning this repository
 
 This project uses Git submodules. To clone including all submodules, run:
 ```bash
 git clone --recurse-submodules https://github.com/Sina1138/glimpse-ui.git
 ```
 If you already cloned without submodules, run:
-```git submodule update --init --recursive```
+```git submodule update --init --recursive``` -->
 
 ## Installation
 
@@ -31,7 +31,7 @@ pip install -r requirements
 
 ## Running Interface Locally
 
-To run this interface locally, first, make sure `gradio` and all the requirements are installed in your environment, and you have correctly included the `glimpse` submodule. Then, you can run the following for a local instance of the interface:
+To run this interface locally, first, make sure `gradio` and all the requirements are installed in your environment. Then, you can run the following for a local instance of the interface:
 ```bash
 gradio ./interface/Demo.py
 ```

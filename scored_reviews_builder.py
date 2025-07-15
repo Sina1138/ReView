@@ -7,7 +7,7 @@ import json
 
 BASE_DIR = Path(__file__).resolve().parent
 
-from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
+from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
 # def tokenize_sentences(text: str) -> list:
 #     # same tokenization as in the original glimpse code

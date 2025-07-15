@@ -5,13 +5,13 @@ import sys, os.path
 import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
-from glimpse.rsasumm.rsa_reranker import RSAReranking
+from dependencies.rsa_reranker import RSAReranking
 import gradio as gr
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
 
 from scored_reviews_builder import load_scored_reviews
-from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
+from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 # from scibert.scibert_polarity.scibert_polarity import predict_polarity
 
 # Load scored reviews
