@@ -11,7 +11,7 @@ nltk.download('punkt')
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from glimpse.glimpse.data_loading.Glimpse_tokenizer import glimpse_tokenizer
+from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
 # === CONFIGURATION ===
 
