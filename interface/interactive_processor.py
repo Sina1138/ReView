@@ -1,0 +1,385 @@
+"""
+Interactive Tab Processing Module
+Aligns interactive review processing with the preprocessed pipeline.
+"""
+
+import sys
+import os
+from pathlib import Path
+import torch
+import math
+from typing import List, Tuple, Dict, Optional
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
+import pandas as pd
+import re
+
+# Add parent directory to path
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR))
+
+from dependencies.rsa_reranker import RSAReranking
+from dependencies.Glimpse_tokenizer import glimpse_tokenizer
+
+# Try to import OpenReview, but don't fail if not available
+try:
+    import openreview
+    OPENREVIEW_AVAILABLE = True
+except ImportError:
+    OPENREVIEW_AVAILABLE = False
+
+
+class InteractiveReviewProcessor:
+    """Process reviews through the same pipeline as preprocessed data."""
+
+    def __init__(self, device: str = "cuda"):
+        """Initialize processor with all required models."""
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+
+        # Load summarization model (for RSA)
+        rsa_model_name = "sshleifer/distilbart-cnn-12-3"
+        self.rsa_model = AutoModelForSeq2SeqLM.from_pretrained(rsa_model_name)
+        self.rsa_tokenizer = AutoTokenizer.from_pretrained(rsa_model_name)
+        self.rsa_model.to(self.device)
+        self.rsa_model.eval()
+
+        # Load polarity model
+        polarity_model_name = "Sina1138/Scibert_polarity_Review"
+        self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
+        self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
+        self.polarity_model.to(self.device)
+        self.polarity_model.eval()
+
+        # Load topic model
+        topic_model_name = "Sina1138/SciDeberta_Review"
+        self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
+        self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
+        self.topic_model.to(self.device)
+        self.topic_model.eval()
+
+        # Topic ID to label mapping
+        self.id2topic = {
+            0: "Substance",
+            1: "Clarity",
+            2: "Soundness/Correctness",
+            3: "Originality",
+            4: "Motivation/Impact",
+            5: "Meaningful Comparison",
+            6: "Replicability",
+            7: None  # Unclassified
+        }
+
+    def predict_polarity(self, sentences: List[str]) -> Dict[str, Optional[str]]:
+        """
+        Predict polarity for sentences.
+        Returns: {sentence: "➕" | "➖" | None}
+        """
+        if not sentences:
+            return {}
+
+        inputs = self.polarity_tokenizer(
+            sentences,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        ).to(self.device)
+
+        with torch.no_grad():
+            logits = self.polarity_model(**inputs).logits
+            preds = torch.argmax(logits, dim=1).cpu().tolist()
+
+        emoji_map = {0: "➖", 1: None, 2: "➕"}
+        return dict(zip(sentences, [emoji_map.get(p, None) for p in preds]))
+
+    def predict_topic(self, sentences: List[str]) -> Dict[str, Optional[str]]:
+        """
+        Predict topic for sentences.
+        Returns: {sentence: topic_label | None}
+        """
+        if not sentences:
+            return {}
+
+        inputs = self.topic_tokenizer(
+            sentences,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        ).to(self.device)
+
+        with torch.no_grad():
+            logits = self.topic_model(**inputs).logits
+            preds = torch.argmax(logits, dim=1).cpu().tolist()
+
+        return dict(zip(sentences, [self.id2topic.get(p, None) for p in preds]))
+
+    def predict_consensuality(
+        self,
+        text1: str,
+        text2: str,
+        text3: str,
+        rationality: float = 1.0,
+        iterations: int = 1
+    ) -> Dict[str, float]:
+        """
+        Predict consensuality using RSA reranking.
+        Returns: {sentence: consensuality_score}
+        """
+        # Tokenize reviews
+        text1_sentences = [s for s in glimpse_tokenizer(text1) if s.strip()]
+        text2_sentences = [s for s in glimpse_tokenizer(text2) if s.strip()]
+        text3_sentences = [s for s in glimpse_tokenizer(text3) if s.strip()]
+
+        # Get unique sentences
+        sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+
+        if not sentences:
+            return {}
+
+        # Run RSA reranking
+        rsa_reranker = RSAReranking(
+            self.rsa_model,
+            self.rsa_tokenizer,
+            candidates=sentences,
+            source_texts=[text1, text2, text3],
+            device=str(self.device),
+            rationality=rationality,
+        )
+
+        _, _, _, _, _, _, _, consensuality_scores = rsa_reranker.rerank(t=iterations)
+
+        # Normalize to [-1, 1]
+        scores = consensuality_scores.copy()
+        scores_min = scores.min()
+        scores_max = scores.max()
+        scores = (scores - scores_min) / (scores_max - scores_min) if scores_max > scores_min else scores
+        scores = scores * 2 - 1  # Scale to [-1, 1]
+
+        return dict(scores)
+
+    def format_highlighted_output(
+        self,
+        sentences: List[str],
+        scores_dict: Dict[str, float],
+        score_type: str = "consensuality"
+    ) -> List[Tuple[str, Optional[float]]]:
+        """
+        Format output for HighlightedText component.
+
+        Args:
+            sentences: List of sentences in order
+            scores_dict: Dictionary mapping sentences to scores
+            score_type: "consensuality", "polarity", or "topic"
+
+        Returns:
+            List of (sentence, score) tuples
+        """
+        if score_type == "consensuality":
+            return [
+                (s, scores_dict.get(s, 0.0) if isinstance(scores_dict.get(s), (int, float)) else None)
+                for s in sentences
+            ]
+        else:  # polarity or topic
+            return [
+                (s, scores_dict.get(s, None))
+                for s in sentences
+            ]
+
+    def process_reviews(
+        self,
+        review1: str,
+        review2: str,
+        review3: str,
+        focus: str = "Agreement"
+    ) -> Dict:
+        """
+        Process three reviews and return scored output.
+
+        Args:
+            review1, review2, review3: Review texts
+            focus: "Agreement", "Polarity", or "Topic"
+
+        Returns:
+            Dictionary with formatted output for all three reviews
+        """
+        # Tokenize reviews
+        text1_sentences = [s for s in glimpse_tokenizer(review1) if s.strip()]
+        text2_sentences = [s for s in glimpse_tokenizer(review2) if s.strip()]
+        text3_sentences = [s for s in glimpse_tokenizer(review3) if s.strip()]
+
+        if not text1_sentences or not text2_sentences or not text3_sentences:
+            raise ValueError("One or more reviews are empty or have no valid sentences")
+
+        # Get unique sentences for scoring
+        all_sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+
+        # Predict scores
+        polarity_map = self.predict_polarity(all_sentences)
+        topic_map = self.predict_topic(all_sentences)
+        consensuality_map = self.predict_consensuality(review1, review2, review3)
+
+        # Prepare output based on focus
+        result = {
+            "review1_sentences": text1_sentences,
+            "review2_sentences": text2_sentences,
+            "review3_sentences": text3_sentences,
+            "consensuality_scores": consensuality_map,
+            "polarity_scores": polarity_map,
+            "topic_scores": topic_map,
+        }
+
+        # Calculate most common and unique sentences
+        if consensuality_map:
+            scores_series = pd.Series(consensuality_map)
+            result["most_common"] = scores_series.nlargest(3).index.tolist()
+            result["most_unique"] = scores_series.nsmallest(3).index.tolist()
+        else:
+            result["most_common"] = []
+            result["most_unique"] = []
+
+        return result
+
+
+def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
+    """
+    Fetch reviews from an OpenReview link.
+
+    Args:
+        link: OpenReview forum link (e.g., https://openreview.net/forum?id=XXX)
+
+    Returns:
+        Tuple of (list of review texts, paper title)
+
+    Raises:
+        ValueError: If link is invalid or no OpenReview access
+        Exception: If fetching fails
+    """
+    print(f"[FETCH] Starting fetch for link: {link}")
+
+    if not OPENREVIEW_AVAILABLE:
+        print("[FETCH] ERROR: OpenReview library not available")
+        raise ValueError(
+            "OpenReview library not available. Install with: pip install openreview-py"
+        )
+
+    print("[FETCH] Step 1: Extracting forum ID from link...")
+    # Extract forum ID from link (more permissive regex)
+    match = re.search(r'id=([^&\s]+)', link)
+    if not match:
+        print("[FETCH] ERROR: Invalid link format")
+        raise ValueError(f"Invalid OpenReview link format. Expected: https://openreview.net/forum?id=XXX")
+
+    forum_id = match.group(1).strip()
+    print(f"[FETCH] Forum ID extracted: {forum_id}")
+
+    try:
+        print("[FETCH] Step 2: Initializing OpenReview client (guest access)...")
+        # Clear credentials from environment so client uses guest access
+        # (same approach as fetch_iclr_data.py)
+        env_backup = {}
+        for key in ['OPENREVIEW_USERNAME', 'OPENREVIEW_PASSWORD']:
+            if key in os.environ:
+                env_backup[key] = os.environ.pop(key)
+                print(f"[FETCH]   Temporarily cleared env var: {key}")
+
+        try:
+            client = openreview.Client(baseurl='https://api.openreview.net')
+        finally:
+            # Restore environment variables
+            for key, value in env_backup.items():
+                os.environ[key] = value
+
+        print("[FETCH] Client initialized successfully (guest mode)")
+
+        print(f"[FETCH] Step 3: Fetching forum notes for forum: {forum_id}")
+        # Get forum notes with error handling
+        try:
+            forum_notes = client.get_notes(forum=forum_id)
+            print(f"[FETCH] Successfully fetched {len(forum_notes)} notes")
+        except Exception as api_error:
+            print(f"[FETCH] ERROR during API call: {type(api_error).__name__}: {str(api_error)}")
+            raise ValueError(f"Failed to connect to OpenReview API: {str(api_error)}")
+
+        if not forum_notes:
+            print("[FETCH] ERROR: No forum notes returned")
+            raise ValueError(f"No forum found for ID: {forum_id}")
+
+        # Get submission to extract title
+        print("[FETCH] Step 4: Extracting paper title...")
+        title = "Unknown Paper"
+
+        # Find submission - try different patterns
+        for i, note in enumerate(forum_notes):
+            invitation = getattr(note, 'invitation', '')
+            print(f"[FETCH]   Note {i}: invitation = {invitation[:80]}")
+
+            if any(pattern in invitation for pattern in ['Blind_Submission', '/Submission']):
+                print(f"[FETCH]   Found submission note!")
+                # Try different content access patterns
+                content = getattr(note, 'content', {})
+                if isinstance(content, dict):
+                    title = content.get('title', 'Unknown Paper')
+                elif hasattr(content, 'get'):
+                    title = content.get('title', 'Unknown Paper')
+                print(f"[FETCH]   Title extracted: {title[:100]}")
+                break
+
+        # Extract reviews - try multiple patterns
+        print("[FETCH] Step 5: Extracting reviews...")
+        reviews = []
+        review_patterns = ['Official_Review', 'Review', 'review']
+
+        for i, note in enumerate(forum_notes):
+            invitation = getattr(note, 'invitation', '')
+
+            # Check if this is a review note
+            if any(pattern in invitation for pattern in review_patterns):
+                print(f"[FETCH]   Found review note {len(reviews)+1}: {invitation[:80]}")
+                # Try different content access patterns
+                content = getattr(note, 'content', {})
+                review_text = None
+
+                # Try different field names
+                for field_name in ['review', 'Review', 'text', 'content']:
+                    if isinstance(content, dict):
+                        review_text = content.get(field_name, '')
+                    elif hasattr(content, 'get'):
+                        review_text = content.get(field_name, '')
+
+                    if review_text and isinstance(review_text, str):
+                        print(f"[FETCH]     Found review text in field: {field_name}")
+                        break
+
+                if review_text and isinstance(review_text, str) and review_text.strip():
+                    reviews.append(review_text.strip())
+                    print(f"[FETCH]     Review added (length: {len(review_text)} chars)")
+
+        print(f"[FETCH] Step 6: Review extraction complete - found {len(reviews)} reviews")
+
+        if not reviews:
+            print(f"[FETCH] ERROR: No reviews found. Total notes: {len(forum_notes)}")
+            print(f"[FETCH] Invitations in this forum:")
+            invitations = {}
+            for note in forum_notes:
+                inv = getattr(note, 'invitation', 'unknown')
+                invitations[inv] = invitations.get(inv, 0) + 1
+            for inv, count in invitations.items():
+                print(f"[FETCH]   - {inv}: {count} notes")
+
+            raise ValueError(f"No official reviews found for submission {forum_id}. "
+                           f"Found {len(forum_notes)} notes total. "
+                           f"Make sure the link is to a paper with reviews.")
+
+        print(f"[FETCH] SUCCESS: Returning {len(reviews)} reviews and title: {title[:50]}")
+        return reviews, title
+
+    except ValueError as ve:
+        print(f"[FETCH] ValueError raised: {str(ve)}")
+        raise
+    except Exception as e:
+        print(f"[FETCH] Unexpected exception: {type(e).__name__}: {str(e)}")
+        import traceback
+        print(f"[FETCH] Traceback: {traceback.format_exc()}")
+        raise Exception(f"Failed to fetch from OpenReview: {str(e)}. "
+                       f"Check your internet connection and verify the forum ID is correct.")
+
