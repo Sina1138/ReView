@@ -11,9 +11,7 @@ python preprocess_data.py
 
 # Step 2: GLIMPSE scoring (RSA consensuality)
 echo "Step 2: Running GLIMPSE consensuality scoring..."
-# Note: This may require modifying glimpse_pk_csv_converter.py to handle 2022-2025
-# For now, skip if complex
-echo "⚠ GLIMPSE scoring may need manual configuration - check glimpse_pk_csv_converter.py"
+python run_glimpse_scoring.py
 
 # Step 3: Polarity scoring
 echo "Step 3: Running polarity classification..."

@@ -8,6 +8,7 @@ import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 import time
+import os
 from typing import List, Dict, Optional
 import logging
 
@@ -18,20 +19,37 @@ logger = logging.getLogger(__name__)
 class ICLRDataFetcher:
     """Fetch ICLR reviews and rebuttals from OpenReview API."""
 
-    def __init__(self, base_url='https://api2.openreview.net'):
+    def __init__(self, base_url='https://api.openreview.net'):
         """
         Initialize OpenReview client.
 
         Note: No authentication needed for public ICLR data.
-        Uses guest client by default.
+        Uses guest client (V1 API) following DISAPERE patterns.
         """
         logger.info(f"Connecting to OpenReview API at {base_url}")
-        self.client = openreview.api.OpenReviewClient(baseurl=base_url)
+
+        # Clear environment credentials to force guest access
+        # (V1 Client also picks up these environment variables)
+        env_backup = {}
+        for key in ['OPENREVIEW_USERNAME', 'OPENREVIEW_PASSWORD']:
+            if key in os.environ:
+                env_backup[key] = os.environ.pop(key)
+
+        try:
+            # Use V1 API client (same as DISAPERE)
+            # No credentials needed for guest access to public data
+            self.client = openreview.Client(baseurl=base_url)
+        finally:
+            # Restore environment variables
+            for key, value in env_backup.items():
+                os.environ[key] = value
 
     def get_venue_id(self, year: int) -> str:
         """Get OpenReview venue ID for ICLR in a given year."""
         # ICLR venue ID format changed over years
         venue_formats = {
+            2020: 'ICLR.cc/2020/Conference',
+            2021: 'ICLR.cc/2021/Conference',
             2022: 'ICLR.cc/2022/Conference',
             2023: 'ICLR.cc/2023/Conference',
             2024: 'ICLR.cc/2024/Conference',
@@ -43,13 +61,30 @@ class ICLRDataFetcher:
         """Fetch all submissions for a venue."""
         logger.info(f"Fetching submissions for {venue_id}")
 
-        # Get all submissions (papers)
-        submissions = self.client.get_all_notes(
-            invitation=f'{venue_id}/-/Blind_Submission',
-            details='directReplies'  # Include reviews and rebuttals as replies
-        )
+        # Get all submissions (papers) using V1 API
+        # Try different invitation patterns (format changed over years)
+        invitation_patterns = [
+            f'{venue_id}/-/Blind_Submission',
+            f'{venue_id}/-/Submission',
+        ]
 
-        logger.info(f"Found {len(submissions)} submissions")
+        submissions = []
+        for pattern in invitation_patterns:
+            try:
+                submissions = list(openreview.tools.iterget_notes(
+                    self.client,
+                    invitation=pattern
+                ))
+                if submissions:
+                    logger.info(f"Found {len(submissions)} submissions with pattern: {pattern}")
+                    break
+            except Exception as e:
+                logger.debug(f"Pattern {pattern} failed: {e}")
+                continue
+
+        if not submissions:
+            logger.warning(f"No submissions found for {venue_id}")
+
         return submissions
 
     def extract_reviews_and_rebuttals(self, submission) -> List[Dict]:
@@ -74,55 +109,51 @@ class ICLRDataFetcher:
         forum_id = submission.id
         forum_url = f"https://openreview.net/forum?id={forum_id}"
 
-        # Get paper metadata
-        paper_title = submission.content.get('title', {}).get('value', '')
-        abstract = submission.content.get('abstract', {}).get('value', '')
+        # Get paper metadata (V1 API format - direct values, not nested dicts)
+        paper_title = submission.content.get('title', '')
+        abstract = submission.content.get('abstract', '')
 
-        # Get meta-review (if exists)
+        # Get all notes for this forum to find reviews, meta-reviews, and rebuttals
+        forum_notes = self.client.get_notes(forum=forum_id)
+
+        # Find meta-review
         metareview_text = ''
         metareview_conf = ''
         decision = ''
 
-        # Check for meta-review in direct replies
-        if hasattr(submission, 'details') and 'directReplies' in submission.details:
-            for reply in submission.details['directReplies']:
-                if 'Meta_Review' in reply.get('invitation', ''):
-                    metareview_text = reply.content.get('metareview', {}).get('value', '')
-                    metareview_conf = reply.content.get('confidence', {}).get('value', '')
-                    decision = reply.content.get('recommendation', {}).get('value', '')
-                    break
+        for note in forum_notes:
+            if 'Meta_Review' in note.invitation:
+                metareview_text = note.content.get('metareview', '')
+                metareview_conf = note.content.get('confidence', '')
+                decision = note.content.get('recommendation', '')
+                break
 
-        # Get official reviews
-        reviews = []
-        if hasattr(submission, 'details') and 'directReplies' in submission.details:
-            for reply in submission.details['directReplies']:
-                # Check if this is an official review
-                if 'Official_Review' in reply.get('invitation', ''):
-                    reviews.append(reply)
+        # Find all official reviews
+        reviews = [note for note in forum_notes if 'Official_Review' in note.invitation]
 
         # Extract data for each review
         for review_note in reviews:
             review_id = review_note.id
 
-            # Extract review content
+            # Extract review content (V1 API - direct values)
             review_content = review_note.content
-            review_text = review_content.get('review', {}).get('value', '')
+            review_text = review_content.get('review', '')
 
             # Handle different rating formats
-            rating_field = review_content.get('rating', {}).get('value', '')
+            rating_field = review_content.get('rating', '')
             if isinstance(rating_field, str):
                 # Format like "6: Marginally above acceptance threshold"
                 rating = rating_field.split(':')[0].strip() if ':' in rating_field else rating_field
             else:
                 rating = str(rating_field)
 
-            confidence = review_content.get('confidence', {}).get('value', '')
+            confidence = review_content.get('confidence', '')
 
             # Get reviewer signature
             reviewer = review_note.signatures[0] if review_note.signatures else 'Anonymous'
 
             # Find rebuttal (author response to this review)
-            rebuttal_text = self._find_rebuttal_for_review(submission, review_id)
+            rebuttal_text = self._find_rebuttal_for_review(forum_notes, review_id)
 
             row = {
                 'id': forum_url,
@@ -142,12 +173,12 @@ class ICLRDataFetcher:
 
         return rows
 
-    def _find_rebuttal_for_review(self, submission, review_id: str) -> str:
+    def _find_rebuttal_for_review(self, forum_notes: List, review_id: str) -> str:
         """
         Find author rebuttal that replies to a specific review.
 
         Simple approach: Look for notes that:
-        1. Are posted by authors
+        1. Are posted by authors (check 'Official_Comment' or 'Author.*Comment')
         2. Reply to (replyto field = review_id)
 
         If multiple rebuttals found, concatenate with separator.
@@ -155,19 +186,28 @@ class ICLRDataFetcher:
         """
         rebuttals = []
 
-        if hasattr(submission, 'details') and 'directReplies' in submission.details:
-            for reply in submission.details['directReplies']:
-                # Check if this is an official review
-                if 'Official_Review' in reply.get('invitation', ''):
-                    # Check replies to this review
-                    if hasattr(reply, 'details') and 'directReplies' in reply.details:
-                        for subreply in reply.details['directReplies']:
-                            # Check if posted by authors
-                            if subreply.get('replyto') == reply.id:
-                                # This is likely a rebuttal
-                                rebuttal_content = subreply.content.get('comment', {}).get('value', '')
-                                if rebuttal_content:
-                                    rebuttals.append(rebuttal_content)
+        # Look through all forum notes for replies to this review
+        for note in forum_notes:
+            # Check if this note is a reply to the review
+            if hasattr(note, 'replyto') and note.replyto == review_id:
+                # Check if it's an author comment/rebuttal
+                invitation = note.invitation if hasattr(note, 'invitation') else ''
+
+                # Patterns that indicate author rebuttals
+                author_patterns = ['Official_Comment', 'Author.*Comment', 'Comment']
+                is_author_reply = any(pattern in invitation for pattern in author_patterns)
+
+                # Also check signatures for author markers
+                if hasattr(note, 'signatures'):
+                    is_author_reply = is_author_reply or any('Authors' in sig for sig in note.signatures)
+
+                if is_author_reply:
+                    # Extract comment text (field name varies: 'comment', 'rebuttal', 'title')
+                    rebuttal_content = (note.content.get('comment', '') or
+                                       note.content.get('rebuttal', '') or
+                                       note.content.get('title', ''))
+                    if rebuttal_content:
+                        rebuttals.append(rebuttal_content)
 
         # Concatenate multiple rebuttals with separator
         if len(rebuttals) > 1:
@@ -177,13 +217,14 @@ class ICLRDataFetcher:
         else:
             return ''  # No rebuttal found
 
-    def fetch_year(self, year: int, output_path: Optional[Path] = None) -> pd.DataFrame:
+    def fetch_year(self, year: int, output_path: Optional[Path] = None, limit: Optional[int] = None) -> pd.DataFrame:
         """
         Fetch all ICLR data for a given year.
 
         Args:
             year: Conference year (2022-2025)
             output_path: Where to save CSV (optional)
+            limit: Limit number of papers to process (for testing)
 
         Returns:
             DataFrame with all reviews and rebuttals
@@ -192,6 +233,11 @@ class ICLRDataFetcher:
 
         venue_id = self.get_venue_id(year)
         submissions = self.fetch_submissions(venue_id)
+
+        # Limit submissions for testing if specified
+        if limit is not None:
+            logger.info(f"⚠️  TEST MODE: Limiting to {limit} submissions (out of {len(submissions)})")
+            submissions = submissions[:limit]
 
         all_rows = []
 
@@ -217,7 +263,9 @@ class ICLRDataFetcher:
         # Save to CSV if path provided
         if output_path:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(output_path, index=False)
+            # Use QUOTE_ALL to properly escape newlines and quotes in text fields
+            import csv
+            df.to_csv(output_path, index=False, quoting=csv.QUOTE_ALL)
             logger.info(f"Saved to {output_path}")
 
         return df
@@ -253,11 +301,52 @@ class ICLRDataFetcher:
 
 
 def main():
-    """Fetch ICLR 2022-2025 data."""
+    """Fetch ICLR 2020-2025 data with rebuttals."""
+    import argparse
 
-    # Configuration
-    years_to_fetch = [2022, 2023, 2024, 2025]
-    output_dir = Path(__file__).parent / 'glimpse' / 'data'
+    parser = argparse.ArgumentParser(
+        description='Fetch ICLR review data from OpenReview API'
+    )
+    parser.add_argument(
+        '--year',
+        type=int,
+        help='Fetch single year only'
+    )
+    parser.add_argument(
+        '--start-year',
+        type=int,
+        default=2020,
+        help='Start year for batch fetch (default: 2020)'
+    )
+    parser.add_argument(
+        '--end-year',
+        type=int,
+        default=2025,
+        help='End year for batch fetch (default: 2025)'
+    )
+    parser.add_argument(
+        '--output-dir',
+        type=Path,
+        default=Path(__file__).parent / 'data',
+        help='Output directory for CSV files'
+    )
+    parser.add_argument(
+        '--limit',
+        type=int,
+        default=None,
+        help='Limit number of papers to process (for testing)'
+    )
+
+    args = parser.parse_args()
+
+    # Determine years to fetch
+    if args.year:
+        years_to_fetch = [args.year]
+    else:
+        years_to_fetch = list(range(args.start_year, args.end_year + 1))
+
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize fetcher
     fetcher = ICLRDataFetcher()
@@ -271,7 +360,7 @@ def main():
         output_path = output_dir / f'all_reviews_{year}.csv'
 
         try:
-            df = fetcher.fetch_year(year, output_path=output_path)
+            df = fetcher.fetch_year(year, output_path=output_path, limit=args.limit)
             fetcher.validate_dataframe(df, year)
 
         except Exception as e:

@@ -6,8 +6,12 @@ Keeps glimpse-ui independent from the glimpse repository.
 
 import pandas as pd
 import os
+import re
 from pathlib import Path
-from config import NEW_DATA_START_YEAR, NEW_DATA_END_YEAR, BASE_DIR
+from config import Config
+
+# Convenience alias
+BASE_DIR = Config.BASE_DIR
 
 
 def preprocess_reviews_with_rebuttals(year: int,
@@ -63,20 +67,59 @@ def preprocess_reviews_with_rebuttals(year: int,
     return True
 
 
+def find_available_years(data_dir: Path = None):
+    """Auto-detect years by scanning data directory for all_reviews_YYYY.csv files."""
+    if data_dir is None:
+        data_dir = BASE_DIR / "data"
+
+    years = []
+    for file in data_dir.glob("all_reviews_*.csv"):
+        match = re.search(r'all_reviews_(\d{4})\.csv', file.name)
+        if match:
+            years.append(int(match.group(1)))
+
+    return sorted(years)
+
+
 def main():
-    """Preprocess all years in the configured range."""
-    print(f"\n{'='*60}")
-    print(f"Preprocessing ICLR data ({NEW_DATA_START_YEAR}-{NEW_DATA_END_YEAR})")
-    print(f"{'='*60}\n")
+    """Preprocess all available years (auto-detected from data directory)."""
+    import argparse
 
-    processed_count = 0
-    for year in range(NEW_DATA_START_YEAR, NEW_DATA_END_YEAR + 1):
-        if preprocess_reviews_with_rebuttals(year):
-            processed_count += 1
+    parser = argparse.ArgumentParser(
+        description='Preprocess ICLR review data with rebuttal support'
+    )
+    parser.add_argument('--year', type=int, help='Process single year only')
+    args = parser.parse_args()
 
-    print(f"\n{'='*60}")
-    print(f"✓ Preprocessing complete: {processed_count} years processed")
-    print(f"{'='*60}\n")
+    if args.year:
+        # Process single year
+        print(f"\nProcessing {args.year}...")
+        if preprocess_reviews_with_rebuttals(args.year):
+            print(f"✓ Successfully preprocessed {args.year}")
+        else:
+            print(f"✗ Failed to preprocess {args.year}")
+    else:
+        # Auto-detect and process all available years
+        available_years = find_available_years()
+
+        if not available_years:
+            print("⚠️  No data files found in data/ directory")
+            print("   Run fetch_iclr_data.py first to download data")
+            return
+
+        print(f"\n{'='*60}")
+        print(f"Preprocessing ICLR data")
+        print(f"Auto-detected years: {available_years}")
+        print(f"{'='*60}\n")
+
+        processed_count = 0
+        for year in available_years:
+            if preprocess_reviews_with_rebuttals(year):
+                processed_count += 1
+
+        print(f"\n{'='*60}")
+        print(f"✓ Preprocessing complete: {processed_count}/{len(available_years)} years processed")
+        print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":

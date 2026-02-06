@@ -16,17 +16,18 @@ class Config:
     POLARITY_DIR = OUTPUT_DIR / "polarity_scored"
     TOPIC_DIR = OUTPUT_DIR / "topic_scored"
 
-    # Year ranges - LEGACY DATA
+    # Year ranges - LEGACY DATA (reference only, for documentation)
     LEGACY_START_YEAR = 2017
     LEGACY_END_YEAR = 2021
 
-    # Year ranges - NEW DATA
-    NEW_DATA_START_YEAR = 2022
+    # Year ranges - NEW DATA (reference only, actual years are auto-detected)
+    # The system can work with any year - these are just for documentation
+    NEW_DATA_START_YEAR = 2020
     NEW_DATA_END_YEAR = 2025
 
     # Output files
     LEGACY_PREPROCESSED = OUTPUT_DIR / "preprocessed_scored_reviews.csv"
-    NEW_PREPROCESSED = OUTPUT_DIR / "preprocessed_scored_reviews_2022-2025.csv"
+    NEW_PREPROCESSED = OUTPUT_DIR / "preprocessed_scored_reviews_2020-2025.csv"
 
     # Feature flags
     INCLUDE_REBUTTALS = True

@@ -121,14 +121,14 @@ def load_scored_reviews(csv_path: Path = BASE_DIR / "data" / "preprocessed_score
     return years, df
 
 
-def build_2022_2025_dataset(
-    start_year: int = 2022,
+def build_2020_2025_dataset(
+    start_year: int = 2020,
     end_year: int = 2025,
-    input_dir: Path = BASE_DIR / "glimpse" / "data" / "processed",
+    input_dir: Path = BASE_DIR / "data" / "processed",  # Independent from glimpse!
     scored_csv_dir: Path = BASE_DIR / "data",
     polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
     topic_dir: Path = BASE_DIR / "data" / "topic_scored",
-    output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2022-2025.csv",
+    output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2020-2025.csv",
 ):
     """
     Build preprocessed dataset for 2022-2025 with rebuttals.
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == '--new-data':
-        build_2022_2025_dataset()
+        build_2020_2025_dataset()
     else:
         # Original behavior for legacy data
         # save_all_scored_reviews()
