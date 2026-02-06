@@ -9,4 +9,6 @@ nltk
 SentencePiece
 spacy
 torch
+openreview-py>=1.20.0
+tqdm
 

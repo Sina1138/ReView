@@ -5,17 +5,50 @@ import sys, os.path
 import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 from dependencies.rsa_reranker import RSAReranking
 import gradio as gr
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
+from pathlib import Path
+import ast
+from tqdm import tqdm
 
 from scored_reviews_builder import load_scored_reviews
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 # from scibert.scibert_polarity.scibert_polarity import predict_polarity
 
-# Load scored reviews
-years, all_scored_reviews_df = load_scored_reviews()
+# Load scored reviews - LEGACY (2017-2021)
+years_legacy, df_legacy = load_scored_reviews()
+
+# Load new reviews with rebuttals (2022-2025) - if available
+def load_scored_reviews_with_rebuttals(
+    csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2022-2025.csv"
+):
+    """Load 2022-2025 dataset with rebuttal metadata."""
+    if not csv_path.exists():
+        return [], pd.DataFrame()  # Return empty if file doesn't exist
+
+    df = pd.read_csv(csv_path)
+    tqdm.pandas(desc="Parsing scored_dict")
+    df["scored_dict"] = df["scored_dict"].progress_apply(ast.literal_eval)
+
+    # Parse metadata column
+    if "metadata" in df.columns:
+        df["metadata"] = df["metadata"].progress_apply(
+            lambda x: ast.literal_eval(x) if pd.notna(x) and x != '{}' else {}
+        )
+    else:
+        df["metadata"] = [{}] * len(df)
+
+    years = df["year"].tolist()
+    return years, df
+
+years_new, df_new = load_scored_reviews_with_rebuttals()
+
+# For backward compatibility, use legacy as default
+years, all_scored_reviews_df = years_legacy, df_legacy
 
 # -----------------------------------
 # Pre-processed Tab

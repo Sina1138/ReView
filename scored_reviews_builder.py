@@ -121,10 +121,86 @@ def load_scored_reviews(csv_path: Path = BASE_DIR / "data" / "preprocessed_score
     return years, df
 
 
+def build_2022_2025_dataset(
+    start_year: int = 2022,
+    end_year: int = 2025,
+    input_dir: Path = BASE_DIR / "glimpse" / "data" / "processed",
+    scored_csv_dir: Path = BASE_DIR / "data",
+    polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
+    topic_dir: Path = BASE_DIR / "data" / "topic_scored",
+    output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2022-2025.csv",
+):
+    """
+    Build preprocessed dataset for 2022-2025 with rebuttals.
+    Separate from legacy 2017-2021 pipeline.
+    """
+    all_scored_reviews = []
+
+    for year in range(start_year, end_year + 1):
+        print(f"Processing {year}...")
+        try:
+            original_csv_path = input_dir / f"all_reviews_{year}.csv"
+
+            # Check if files exist
+            if not original_csv_path.exists():
+                print(f"⚠ Skipping {year} - no processed data file found")
+                continue
+
+            polarity_csv_path = polarity_dir / f"polarity_scored_reviews_{year}.csv"
+            topic_csv_path = topic_dir / f"topic_scored_reviews_{year}.csv"
+            scored_csv_path = scored_csv_dir / f"GLIMPSE_results_{year}.csv"
+
+            # Use existing preprocessed_scores function
+            scored_reviews = preprocessed_scores(
+                original_csv_path,
+                scored_csv_path,
+                polarity_csv_path,
+                topic_csv_path,
+            )
+
+            # Load original data to extract rebuttals
+            original_df = pd.read_csv(original_csv_path)
+
+            # Build metadata dict with rebuttals
+            review_metadata = {}
+            for _, row in original_df.iterrows():
+                review_id = row["id"]
+                review_metadata[review_id] = {
+                    'rebuttal': row.get('rebuttal', ''),
+                    'paper_title': row.get('paper_title', '') if 'paper_title' in original_df.columns else '',
+                    'has_rebuttal': bool(row.get('rebuttal', '').strip()) if 'rebuttal' in original_df.columns else False,
+                }
+
+            all_scored_reviews.append({
+                "year": year,
+                "scored_dict": scored_reviews,
+                "metadata": review_metadata,
+            })
+
+        except Exception as e:
+            print(f"✗ Error processing {year}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Save to separate CSV
+    df = pd.DataFrame(all_scored_reviews)
+    df.to_csv(output_csv_path, index=False)
+    print(f"\n✓ New dataset saved to: {output_csv_path}")
+    print(f"  Years included: {start_year}-{end_year}")
+    print(f"  File size: {output_csv_path.stat().st_size / 1024 / 1024:.1f} MB")
+
+
 if __name__ == "__main__":
-    # save_all_scored_reviews()
-    years, all_scored_reviews_df = load_scored_reviews()
-    print (years)
+    # Add option to build new dataset
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == '--new-data':
+        build_2022_2025_dataset()
+    else:
+        # Original behavior for legacy data
+        # save_all_scored_reviews()
+        years, all_scored_reviews_df = load_scored_reviews()
+        print (years)
     
     # Debugging sample output
     sample_year = 2021
