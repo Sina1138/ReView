@@ -1,6 +1,6 @@
 import math
-
 import sys, os.path
+from pathlib import Path
 
 import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
@@ -11,20 +11,15 @@ from dependencies.rsa_reranker import RSAReranking
 import gradio as gr
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
-from pathlib import Path
 import ast
 from tqdm import tqdm
 
-from scored_reviews_builder import load_scored_reviews
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 # from scibert.scibert_polarity.scibert_polarity import predict_polarity
 
-# Load scored reviews - LEGACY (2017-2021)
-years_legacy, df_legacy = load_scored_reviews()
-
-# Load new reviews with rebuttals (2022-2025) - if available
+# Load new reviews with rebuttals (2020-2025) - if available
 def load_scored_reviews_with_rebuttals(
-    csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2022-2025.csv"
+    csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2020-2025.csv"
 ):
     """Load 2022-2025 dataset with rebuttal metadata."""
     if not csv_path.exists():
@@ -47,8 +42,13 @@ def load_scored_reviews_with_rebuttals(
 
 years_new, df_new = load_scored_reviews_with_rebuttals()
 
-# For backward compatibility, use legacy as default
-years, all_scored_reviews_df = years_legacy, df_legacy
+if df_new.empty:
+    raise FileNotFoundError(
+        "New dataset not found or empty. Expected data/preprocessed_scored_reviews_2020-2025.csv"
+    )
+
+# Use new data only
+years, all_scored_reviews_df = years_new, df_new
 
 # -----------------------------------
 # Pre-processed Tab
@@ -311,7 +311,9 @@ with gr.Blocks(title="ReView") as demo:
     # -----------------------------------
     with gr.Tab("Pre-processed Reviews"):
         # Initialize state for this session.
-        initial_year = 2017
+        if not years:
+            raise ValueError("No years available in new dataset")
+        initial_year = years[0]
         initial_scored_reviews = get_preprocessed_scores(initial_year)
         initial_review_ids = list(initial_scored_reviews.keys())
         initial_review = initial_scored_reviews[initial_review_ids[0]]

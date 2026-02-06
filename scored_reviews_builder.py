@@ -165,10 +165,16 @@ def build_2020_2025_dataset(
             review_metadata = {}
             for _, row in original_df.iterrows():
                 review_id = row["id"]
+                rebuttal = row.get('rebuttal', '') if 'rebuttal' in original_df.columns else ''
+                # Handle NaN values from pandas
+                if pd.isna(rebuttal):
+                    rebuttal = ''
+                rebuttal_str = str(rebuttal) if rebuttal else ''
+                
                 review_metadata[review_id] = {
-                    'rebuttal': row.get('rebuttal', ''),
+                    'rebuttal': rebuttal_str,
                     'paper_title': row.get('paper_title', '') if 'paper_title' in original_df.columns else '',
-                    'has_rebuttal': bool(row.get('rebuttal', '').strip()) if 'rebuttal' in original_df.columns else False,
+                    'has_rebuttal': bool(rebuttal_str.strip()) if rebuttal_str else False,
                 }
 
             all_scored_reviews.append({
@@ -202,34 +208,20 @@ if __name__ == "__main__":
         years, all_scored_reviews_df = load_scored_reviews()
         print (years)
     
-    # Debugging sample output
-    sample_year = 2021
+        # Debugging sample output
+        sample_year = 2021
 
-    sample_df = all_scored_reviews_df[all_scored_reviews_df["year"] == sample_year]
-    review_dict = sample_df["scored_dict"].iloc[0]
+        sample_df = all_scored_reviews_df[all_scored_reviews_df["year"] == sample_year]
+        review_dict = sample_df["scored_dict"].iloc[0]
 
-    print(f"\n=== Sample Review from {sample_year} ===")
-    for review_id, sentence_data_list in review_dict.items():
-        print(f"\nReview ID: {review_id}")
-        for sentence_dict in sentence_data_list:
-            for sentence, data in sentence_dict.items():
-                print(f"  Sentence: {sentence}")
-                for key, value in data.items():
-                    print(f"    → {key}: {value}")
-            break  # print only the first review's sentences
-        break  # only one review
+        print(f"\n=== Sample Review from {sample_year} ===")
+        for review_id, sentence_data_list in review_dict.items():
+            print(f"\nReview ID: {review_id}")
+            for sentence_dict in sentence_data_list:
+                for sentence, data in sentence_dict.items():
+                    print(f"  Sentence: {sentence}")
+                    for key, value in data.items():
+                        print(f"    → {key}: {value}")
+                break  # print only the first review's sentences
+            break  # only one review
 
-        
-    # --- Testing code ---
-    # scored_reviews_2017 = all_scored_reviews_df[all_scored_reviews_df["year"] == 2017]
-    # print(scored_reviews_2017)
-    # scored_reviews_2017 = scored_reviews_2017["scored_dict"].iloc[0]
-    # # scored_reviews_2017 = ast.literal_eval(scored_reviews_2017)
-    # print(type(scored_reviews_2017))
-    # print(scored_reviews_2017.keys())
-    # sample = scored_reviews_2017["https://openreview.net/forum?id=r1rhWnZkg"]
-    # print(sample[0])
-    
-    # print(years)
-    # for id in scored_reviews_2017.keys():
-    #     print(len(scored_reviews_2017[id]))
