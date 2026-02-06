@@ -1,17 +1,23 @@
-# project ignores
-# glimpse/
-data/DISAPERE-main/
-*checkpoints/
+# project logs and guides
+logs_and_guides/
+!README.md
+*.md
+
+# ========================================================================
+
 .gradio/
-test.py
-data/*
+*checkpoints/
 *final_model/
-alternative_polarity/llama/
-!data/ExtractDISAPEREData.py
-!data/preprocessed_scored_reviews.csv
 *_OLD/
 *_old/
+alternative_polarity/llama/
+data/*
+data/DISAPERE-main/
+!data/ExtractDISAPEREData.py
+!data/preprocessed_scored_reviews.csv
+test.py
 
+# ========================================================================
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

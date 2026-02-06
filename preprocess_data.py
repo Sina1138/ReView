@@ -14,6 +14,37 @@ from config import Config
 BASE_DIR = Config.BASE_DIR
 
 
+def clean_text(text):
+    """
+    Clean review/rebuttal text by removing formatting artifacts.
+
+    Removes:
+    - Hash separator lines (##########...)
+    - Excessive whitespace and blank lines
+    - Markdown formatting artifacts from OpenReview
+
+    Args:
+        text: Raw text from OpenReview
+
+    Returns:
+        Cleaned text with normalized whitespace
+    """
+    if not isinstance(text, str) or not text.strip():
+        return ""
+
+    # Remove hash separator lines (common in rebuttals)
+    text = re.sub(r'#{2,}[\s]*\n', '\n', text)
+    text = re.sub(r'#{2,}', '', text)
+
+    # Remove excessive blank lines (more than 2 consecutive)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+
+    # Strip leading/trailing whitespace
+    text = text.strip()
+
+    return text
+
+
 def preprocess_reviews_with_rebuttals(year: int,
                                        input_dir: Path = None,
                                        output_dir: Path = None):
@@ -61,6 +92,11 @@ def preprocess_reviews_with_rebuttals(year: int,
         }, inplace=True)
         sub_dataset['rebuttal'] = ''
         print(f"  ✓ Found {len(dataset)} reviews (no rebuttals)")
+
+    # Clean text and rebuttal columns
+    print(f"  → Cleaning review text...")
+    sub_dataset['text'] = sub_dataset['text'].apply(clean_text)
+    sub_dataset['rebuttal'] = sub_dataset['rebuttal'].apply(clean_text)
 
     sub_dataset.to_csv(output_file, index=False)
     print(f"  → Saved to {output_file}")
