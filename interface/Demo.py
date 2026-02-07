@@ -1,21 +1,16 @@
-import math
 import sys, os.path
 from pathlib import Path
+from typing import Tuple
 
 import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-from dependencies.rsa_reranker import RSAReranking
 import gradio as gr
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
 import ast
 from tqdm import tqdm
-
-from dependencies.Glimpse_tokenizer import glimpse_tokenizer
-# from scibert.scibert_polarity.scibert_polarity import predict_polarity
 
 # Load new reviews with rebuttals (2020-2025) - if available
 def load_scored_reviews_with_rebuttals(
@@ -60,14 +55,8 @@ def get_preprocessed_scores(year):
 
 
 # -----------------------------------
-# Interactive Tab
+# Interactive Tab Configuration
 # -----------------------------------
-
-# RSA_model = "facebook/bart-large-cnn"
-RSA_model = "sshleifer/distilbart-cnn-12-3"
-
-model = AutoModelForSeq2SeqLM.from_pretrained(RSA_model)
-tokenizer = AutoTokenizer.from_pretrained(RSA_model)
 
 # Define the manual color map for topics
 topic_color_map = {
@@ -125,176 +114,165 @@ EXAMPLES = [
     "The paper gives really interesting insights on the topic of transfer learning. It is not well presented and lack experiments. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
 ]
 
-# Function to summarize the input texts using the RSAReranking model in interactive mode
-def summarize(text1, text2, text3, focus, mode, rationality=1.0, iterations=1):
-    
-    # print(focus, mode, rationality, iterations)
-    
-    # get sentences for each text
-    text2_sentences = glimpse_tokenizer(text2)
-    text1_sentences = glimpse_tokenizer(text1)
-    text3_sentences = glimpse_tokenizer(text3)
+PROCESSING_TIMER_HTML = """
+<div style="display:flex;align-items:center;gap:12px;padding:16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+  <div style="width:24px;height:24px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+  <div>
+    <div style="font-weight:600;color:#312e81;">Processing reviews...</div>
+  </div>
+</div>
+<style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
+"""
+
+FETCHING_HTML = """
+<div style="display:flex;align-items:center;gap:12px;padding:16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+  <div style="width:24px;height:24px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+  <div>
+    <div style="font-weight:600;color:#312e81;">Fetching reviews from OpenReview...</div>
+  </div>
+</div>
+<style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
+"""
+
+def _status_html(msg, kind="success"):
+    """Generate styled HTML for status messages."""
+    styles = {
+        "success": ("✅", "#f0fdf4", "#16a34a", "#166534", "#bbf7d0"),
+        "error":   ("❌", "#fef2f2", "#dc2626", "#991b1b", "#fecaca"),
+        "warning": ("⚠️", "#fffbeb", "#d97706", "#92400e", "#fde68a"),
+    }
+    icon, bg, _, text_color, border_color = styles.get(kind, styles["success"])
+    return f'''<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:{bg};border-radius:8px;border:1px solid {border_color};margin:8px 0;">
+  <span style="font-size:1.2em;">{icon}</span>
+  <span style="color:{text_color};font-weight:500;">{msg}</span>
+</div>'''
+
+# ===== INTERACTIVE TAB: GLOBAL PROCESSOR INITIALIZATION =====
+# Initialize once at module load to avoid reloading models
+from interface.interactive_processor import InteractiveReviewProcessor
+_interactive_processor = None
+
+def get_interactive_processor():
+    """Lazy-load the processor to avoid duplicate model loading."""
+    global _interactive_processor
+    if _interactive_processor is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _interactive_processor = InteractiveReviewProcessor(device=device)
+    return _interactive_processor
 
 
-    # remove empty sentences
-    text1_sentences = [sentence for sentence in text1_sentences if sentence != ""]
-    text2_sentences = [sentence for sentence in text2_sentences if sentence != ""]
-    text3_sentences = [sentence for sentence in text3_sentences if sentence != ""]
+def fetch_openreview_reviews(link: str) -> Tuple[str, str, str, str, str]:
+    """
+    Fetch reviews from OpenReview link and populate the textboxes.
 
-    sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
-    
-    # Load polarity model and tokenizer (SciBERT)
-    polarity_model_path = "Sina1138/Scibert_polarity_Review"
-    polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_path)
-    polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_path)
-    polarity_model.eval()
-    polarity_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    polarity_model.to(polarity_device)
+    Returns:
+        Tuple of (review1, review2, review3, title, status_html)
+    """
+    print(f"\n[DEMO] fetch_openreview_reviews called with link: {link}")
 
-    def predict_polarity(sent_list):
-        inputs = polarity_tokenizer(
-            sent_list, return_tensors="pt", padding=True, truncation=True, max_length=512
-        ).to(polarity_device)
-        with torch.no_grad():
-            logits = polarity_model(**inputs).logits
-            preds = torch.argmax(logits, dim=1).cpu().tolist()
-        emoji_map = {0: "➖", 1: None, 2: "➕"}
-        return dict(zip(sent_list, [emoji_map[p] for p in preds]))
+    if not link.strip():
+        return ("", "", "", "", _status_html("Please paste a valid OpenReview link", "error"))
 
+    try:
+        from interface.interactive_processor import fetch_reviews_from_openreview_link
+        reviews, title = fetch_reviews_from_openreview_link(link)
+        print(f"[DEMO] Got {len(reviews)} reviews from fetch function")
 
-    # Run polarity prediction
-    polarity_map = predict_polarity(sentences)
+        while len(reviews) < 3:
+            reviews.append("")
+        reviews = reviews[:3]
 
+        num_reviews = len([r for r in reviews if r.strip()])
+        status = _status_html(f"Fetched {num_reviews} reviews for: {title}", "success")
+        return (reviews[0], reviews[1], reviews[2], title, status)
 
-    # Load topic model and tokenizer (SciBERT)
-    topic_model_path = "Sina1138/SciDeberta_Review"
-    topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_path)
-    topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_path)
-    topic_model.eval()
-    topic_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    topic_model.to(topic_device)
-    
-    def predict_topic(sent_list):
-        inputs = topic_tokenizer(
-            sent_list, return_tensors="pt", padding=True, truncation=True, max_length=512
-        ).to(topic_device)
-        with torch.no_grad():
-            logits = topic_model(**inputs).logits
-            preds = torch.argmax(logits, dim=1).cpu().tolist()
-        
-        # Topic ID to label and emoji
-        id2label = {
-            0: "Substance",
-            1: "Clarity",
-            2: "Correctness",
-            3: "Originality",
-            4: "Impact",
-            5: "Comparison",
-            6: "Replicability",
-            7: None  # This is used for sentences that do not match any specific topic,
-        }
-        return dict(zip(sent_list, [id2label[p] for p in preds]))
-    
-    # Run topic prediction
-    topic_map = predict_topic(sentences)
-    
+    except ValueError as e:
+        error_msg = str(e)
+        print(f"[DEMO] ValueError caught: {error_msg}")
+        return ("", "", "", "", _status_html(error_msg, "warning"))
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[DEMO] Exception caught: {type(e).__name__}: {error_msg}")
+
+        if "openreview" in error_msg.lower():
+            suggestion = " Try: pip install openreview-py"
+        elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+            suggestion = " Check your internet connection."
+        else:
+            suggestion = ""
+
+        return ("", "", "", "", _status_html(f"{error_msg}{suggestion}", "error"))
 
 
-    rsa_reranker = RSAReranking(
-        model,
-        tokenizer,
-        candidates=sentences,
-        source_texts=[text1, text2, text3],
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        rationality=rationality,
-    )
-    (
-        best_rsa,
-        best_base,
-        speaker_df,
-        listener_df,
-        initial_listener,
-        language_model_proba_df,
-        initial_consensuality_scores,
-        consensuality_scores,
-    ) = rsa_reranker.rerank(t=iterations)
+def process_interactive_reviews(text1: str, text2: str, text3: str, focus: str, progress=gr.Progress()) -> Tuple:
+    """
+    Process reviews through the interactive pipeline with progress tracking.
+    """
+    from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
-    # apply exp to the probabilities
-    speaker_df = speaker_df.applymap(lambda x: math.exp(x))
+    # Validate input
+    if not text1.strip() and not text2.strip() and not text3.strip():
+        raise ValueError("Please enter at least one review")
 
-    text_1_summaries = speaker_df.loc[text1][text1_sentences]
-    text_1_summaries = text_1_summaries / text_1_summaries.sum()
+    # Step 1: Load models
+    progress(0.0, desc="Loading models...")
+    processor = get_interactive_processor()
 
-    text_2_summaries = speaker_df.loc[text2][text2_sentences]
-    text_2_summaries = text_2_summaries / text_2_summaries.sum()
+    # Step 2: Tokenize
+    progress(0.10, desc="Tokenizing reviews...")
+    text1_sentences = [s for s in glimpse_tokenizer(text1) if s.strip()]
+    text2_sentences = [s for s in glimpse_tokenizer(text2) if s.strip()]
+    text3_sentences = [s for s in glimpse_tokenizer(text3) if s.strip()]
 
-    text_3_summaries = speaker_df.loc[text3][text3_sentences]
-    text_3_summaries = text_3_summaries / text_3_summaries.sum()
+    if not text1_sentences or not text2_sentences or not text3_sentences:
+        raise ValueError("One or more reviews are empty or have no valid sentences")
 
-    # make list of tuples
-    text_1_summaries = [(sentence, text_1_summaries[sentence]) for sentence in text1_sentences]
-    text_2_summaries = [(sentence, text_2_summaries[sentence]) for sentence in text2_sentences]
-    text_3_summaries = [(sentence, text_3_summaries[sentence]) for sentence in text3_sentences]
+    all_sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
 
-    # normalize consensuality scores between -1 and 1
-    consensuality_scores = (consensuality_scores - (consensuality_scores.max() - consensuality_scores.min()) / 2) / (consensuality_scores.max() - consensuality_scores.min()) / 2
+    # Step 3: Polarity
+    progress(0.20, desc="Predicting polarity...")
+    polarity_map = processor.predict_polarity(all_sentences)
 
-    # get most and least consensual sentences
-    # most consensual --> most common; least consensual --> most unique
-    most_consensual = consensuality_scores.sort_values(ascending=True).head(3).index.tolist()
-    least_consensual = consensuality_scores.sort_values(ascending=False).head(3).index.tolist()
-    
-    # Convert lists to strings
-    most_consensual = " ".join(most_consensual)
-    least_consensual = " ".join(least_consensual)
+    # Step 4: Topic
+    progress(0.40, desc="Predicting topics...")
+    topic_map = processor.predict_topic(all_sentences)
 
-    text_1_consensuality = consensuality_scores.loc[text1_sentences]
-    text_2_consensuality = consensuality_scores.loc[text2_sentences]
-    text_3_consensuality = consensuality_scores.loc[text3_sentences]
+    # Step 5: Consensuality (RSA) - the slow one
+    progress(0.55, desc="Computing agreement (RSA reranking)...")
+    consensuality_map = processor.predict_consensuality(text1, text2, text3)
 
-    text_1_consensuality = [(sentence, text_1_consensuality[sentence]) for sentence in text1_sentences]
-    text_2_consensuality = [(sentence, text_2_consensuality[sentence]) for sentence in text2_sentences]
-    text_3_consensuality = [(sentence, text_3_consensuality[sentence]) for sentence in text3_sentences]
+    # Step 6: Format results
+    progress(0.90, desc="Formatting results...")
 
+    # Most common / unique
+    if consensuality_map:
+        import pandas as _pd
+        scores_series = _pd.Series(consensuality_map)
+        most_common_text = "\n".join(scores_series.nlargest(3).index.tolist())
+        most_unique_text = "\n".join(scores_series.nsmallest(3).index.tolist())
+    else:
+        most_common_text = ""
+        most_unique_text = ""
 
-    def highlight_reviews(text_sentences, consensuality_scores, threshold_common=0.0, threshold_unique=0.0):
-        highlighted = []
-        for sentence in text_sentences:
-            # print(f"Processing sentence: {sentence}", "score:", consensuality_scores.loc[sentence])
-            score = consensuality_scores.loc[sentence]
-            score = score*2 if score > 0 else score  # amplify unique scores for better visibility
-            
-            # common sentences --> positive consensuality scores
-            # unique sentences --> negative consensuality scores
-            
-            score *= -1 # invert the score for highlighting
-            
-            highlighted.append((sentence, score))
-        return highlighted
+    # Format highlighted outputs
+    fmt = processor.format_highlighted_output
+    r1_agree = fmt(text1_sentences, consensuality_map, "consensuality")
+    r2_agree = fmt(text2_sentences, consensuality_map, "consensuality")
+    r3_agree = fmt(text3_sentences, consensuality_map, "consensuality")
+    r1_polar = fmt(text1_sentences, polarity_map, "polarity")
+    r2_polar = fmt(text2_sentences, polarity_map, "polarity")
+    r3_polar = fmt(text3_sentences, polarity_map, "polarity")
+    r1_topic = fmt(text1_sentences, topic_map, "topic")
+    r2_topic = fmt(text2_sentences, topic_map, "topic")
+    r3_topic = fmt(text3_sentences, topic_map, "topic")
 
-    # Apply highlighting to each review
-    text_1_agreement = highlight_reviews(text1_sentences, consensuality_scores)
-    text_2_agreement = highlight_reviews(text2_sentences, consensuality_scores)
-    text_3_agreement = highlight_reviews(text3_sentences, consensuality_scores)
-    
-    # Add polarity outputs
-    text_1_polarity = [(s, polarity_map[s]) for s in text1_sentences]
-    text_2_polarity = [(s, polarity_map[s]) for s in text2_sentences]
-    text_3_polarity = [(s, polarity_map[s]) for s in text3_sentences]
-    
-    # Add topic outputs
-    text_1_topic = [(s, topic_map[s]) for s in text1_sentences]
-    text_2_topic = [(s, topic_map[s]) for s in text2_sentences]
-    text_3_topic = [(s, topic_map[s]) for s in text3_sentences]
-    
-    # print(type(text_1_consensuality))
+    progress(1.0, desc="Done!")
+
     return (
-        # text_1_summaries, text_2_summaries, text_3_summaries,
-        # text_1_consensuality, text_2_consensuality, text_3_consensuality,
-        text_1_agreement, text_2_agreement, text_3_agreement,
-        most_consensual, least_consensual,
-        text_1_polarity, text_2_polarity, text_3_polarity,
-        text_1_topic, text_2_topic, text_3_topic,
+        r1_agree, r2_agree, r3_agree,
+        most_common_text, most_unique_text,
+        r1_polar, r2_polar, r3_polar,
+        r1_topic, r2_topic, r3_topic,
     )
 
 
@@ -617,207 +595,223 @@ with gr.Blocks(title="ReView") as demo:
     # -----------------------------------
     # Interactive Tab
     # -----------------------------------
-    with gr.Tab("Interactive", interactive=True):            
+    with gr.Tab("Interactive", interactive=True):
+
+        # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
-            with gr.Column():
-                
-                gr.Markdown("## Input Reviews")
-                
-                # review_count = gr.Slider(minimum=1, maximum=3, step=1, value=3, label="Number of Reviews", interactive=True)
+            back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
+            view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
-                review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="Review 1", interactive=True)
-                review2_textbox = gr.Textbox(lines=5, value=EXAMPLES[1], label="Review 2", interactive=True)
-                review3_textbox = gr.Textbox(lines=5, value=EXAMPLES[2], label="Review 3", interactive=True)
-                
-                with gr.Row():
-                    submit_button = gr.Button("Process", variant="primary", interactive=True)
-                    clear_button = gr.Button("Clear", variant="secondary", interactive=True)
-                gr.Markdown("**Note**: *Once your inputs are processed, you can see the different result by <ins>**only changing the parameters**</ins>, and without the need to re-process.*", container=True)
-                
-                
-                
-            with gr.Column():
-                
-                gr.Markdown("## Results")
-                
-                mode_radio = gr.Radio(
-                    choices=[("In-line Highlighting", "highlight"), ("Generate Summaries", "summary")],
-                    value="highlight",
-                    label="Output Mode:",
-                    interactive=False,
-                    visible=False  # Initially hidden, will be shown based on mode selection
-                )
-                focus_radio = gr.Radio(
-                    choices=[("Agreement", "unique"), "Polarity", "Topic",],
-                    value="unique",
-                    label="Focus on:",
-                    interactive=True
-                )                
-                generation_method_radio = gr.Radio(
-                    choices=[("Extractive", "extractive")], #TODO: add ("Abstractive", "abstractive") and abstractive generation
-                    value="extractive",
-                    label="Generation Method:",
-                    interactive=True,
-                    visible=False
-                )
-                
-                # Fixed rationality (3.0) and iterations (2) to be consistent with the compute_rsa.py script
-                #iterations_slider = gr.Slider(minimum=1, maximum=10, step=1, value=2, label="Iterations", interactive=False, visible=False)
-                # rationality_slider = gr.Slider(minimum=0.0, maximum=10.0, step=0.1, value=2.0, label="Rationality", interactive=False, visible=False)
-                    
-                with gr.Row():
-                    unique_sentences = gr.Textbox(
-                        lines=6, label="Most Divergent Opinions", visible=True, value=None, container=True
-                    )
-                    common_sentences = gr.Textbox(
-                        lines=6, label="Most Common Opinions", visible=True, value=None, container=True
-                    )
-                
-                uniqueness_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Review 1", visible=True, value=None,
-                )
-                uniqueness_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Review 2", visible=True, value=None,
-                )
-                uniqueness_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Agreement in Review 3", visible=True, value=None,
-                )
-                
-                
-                polarity_score_text1 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Review 1", visible=False, value=None,
-                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
-                )
-                polarity_score_text2 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Review 2", visible=False, value=None,
-                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
-                )
-                polarity_score_text3 = gr.HighlightedText(
-                    show_legend=True, label="Polarity in Review 3", visible=False, value=None,
-                    color_map={"➕": "#d4fcd6", "➖": "#fcd6d6" }
-                )
-                
-                aspect_score_text1 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Review 1", visible=False, value=None,
-                    color_map = topic_color_map
-                )
-                aspect_score_text2 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Review 2", visible=False, value=None,
-                    color_map = topic_color_map
-                )
-                aspect_score_text3 = gr.HighlightedText(
-                    show_legend=False, label="Topic in Review 3", visible=False, value=None,
-                    color_map = topic_color_map
-                )
-                
-                
+        # ---- INPUT SECTION (full-width, visible initially) ----
+        with gr.Column(visible=True) as input_section:
+            gr.Markdown("## Input Reviews")
 
-            
-            # Connect summarize function to submit button
-            submit_button.click(
-                fn=summarize,
-                inputs=[
-                    review1_textbox, review2_textbox, review3_textbox,
-                    focus_radio, mode_radio
-                ],
-                outputs=[
-                    uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    common_sentences, unique_sentences,
-                    polarity_score_text1, polarity_score_text2, polarity_score_text3,
-                    aspect_score_text1, aspect_score_text2, aspect_score_text3 
-                    
-                ]
-            )
-            
-            # Define clear button behavior
-            clear_button.click(
-                fn=lambda: (None, None, None, None, None, None, None, None, None, None, None), # clear all fields
-                inputs=[],
-                outputs=[
-                    review1_textbox, review2_textbox, review3_textbox,
-                    uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    common_sentences, unique_sentences
-                ]
-            )
-            
-            # Update visibility of generation_method_radio based on mode_radio value
-            # def toggle_generation_method(mode):
-            #     if mode == "summary":
-            #         return gr.update(visible=True), gr.update(visible=False) # show generation method radio, hide focus radio
-            #     else:
-            #         return gr.update(visible=False), gr.update(visible=True) # show focus radio, hide generation method radio
-            
-            # mode_radio.change(
-            #     fn=toggle_generation_method,
-            #     inputs=mode_radio,
-            #     outputs=[generation_method_radio, focus_radio]
-            # )
-            
-            # Update visibility of output textboxes based on mode_radio and focus_radio values
-            def toggle_output_textboxes(mode, focus):
-                if mode == "highlight" and focus == "unique":
-                    return (
-                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), # in-line uniqueness highlights
-                        gr.update(visible=True), gr.update(visible=True), # summary highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # polarity highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False) # aspect highlights
-                    )
+            with gr.Tabs():
+                with gr.Tab("Paste Reviews"):
+                    review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="Review 1", interactive=True)
+                    review2_textbox = gr.Textbox(lines=5, value=EXAMPLES[1], label="Review 2", interactive=True)
+                    review3_textbox = gr.Textbox(lines=5, value=EXAMPLES[2], label="Review 3", interactive=True)
+                    with gr.Row():
+                        submit_button = gr.Button("Process", variant="primary", interactive=True)
+                        clear_button = gr.Button("Clear", variant="secondary", interactive=True)
 
-                elif focus == "Polarity":
-                    return (
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line uniqueness highlights
-                        gr.update(visible=False), gr.update(visible=False), # summary highlights
-                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True), # polarity highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False) # aspect highlights
+                with gr.Tab("OpenReview Link"):
+                    gr.Markdown("""
+                    Paste an OpenReview forum link to automatically fetch and process its reviews.
+
+                    **Example link:**
+                    https://openreview.net/forum?id=...
+                    """)
+                    openreview_link_input = gr.Textbox(
+                        label="OpenReview Forum Link",
+                        placeholder="https://openreview.net/forum?id=...",
+                        interactive=True
                     )
-                
-                elif focus == "Topic":
-                    return (
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # in-line uniqueness highlights
-                        gr.update(visible=False), gr.update(visible=False), # summary highlights
-                        gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), # polarity highlights
-                        gr.update(visible=True), gr.update(visible=True), gr.update(visible=True) # aspect highlights
-                    )
-            
-            focus_radio.change(
-                fn=toggle_output_textboxes,
-                inputs=[mode_radio, focus_radio],
-                outputs=[
-                    uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-                    common_sentences, unique_sentences,
-                    polarity_score_text1, polarity_score_text2, polarity_score_text3,
-                    aspect_score_text1, aspect_score_text2, aspect_score_text3
-                ]
+                    fetch_reviews_button = gr.Button("Fetch & Process", variant="primary", interactive=True)
+                    openreview_title = gr.Textbox(label="Paper Title", interactive=False, visible=False, value="")
+
+            status_html = gr.HTML("", visible=False)
+
+        # ---- RESULTS SECTION (full-width, hidden initially) ----
+        with gr.Column(visible=False) as results_section:
+            focus_radio = gr.Radio(
+                choices=["Agreement", "Polarity", "Topic"],
+                value="Agreement",
+                label="Display Mode:",
+                interactive=True
             )
-            # mode_radio.change(
-            #     fn=toggle_output_textboxes,
-            #     inputs=[mode_radio, focus_radio],
-            #     outputs=[
-            #         uniqueness_score_text1, uniqueness_score_text2, uniqueness_score_text3,
-            #         consensuality_score_text1, consensuality_score_text2, consensuality_score_text3,
-            #         most_consensual_sentences, most_unique_sentences
-            #     ]
-            # )
-           
-        # TODO: Configure the slider for the number of review boxes 
+
+            with gr.Row():
+                most_divergent = gr.Textbox(
+                    lines=4, label="Most Divergent Opinions", visible=True, value="", container=True
+                )
+                most_common = gr.Textbox(
+                    lines=4, label="Most Common Opinions", visible=True, value="", container=True
+                )
+
+            agreement_text1 = gr.HighlightedText(
+                show_legend=True, label="Agreement in Review 1", visible=True, value=None,
+            )
+            agreement_text2 = gr.HighlightedText(
+                show_legend=True, label="Agreement in Review 2", visible=True, value=None,
+            )
+            agreement_text3 = gr.HighlightedText(
+                show_legend=True, label="Agreement in Review 3", visible=True, value=None,
+            )
+
+            polarity_text1 = gr.HighlightedText(
+                show_legend=True, label="Polarity in Review 1", visible=False, value=None,
+                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
+            )
+            polarity_text2 = gr.HighlightedText(
+                show_legend=True, label="Polarity in Review 2", visible=False, value=None,
+                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
+            )
+            polarity_text3 = gr.HighlightedText(
+                show_legend=True, label="Polarity in Review 3", visible=False, value=None,
+                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
+            )
+
+            topic_text1 = gr.HighlightedText(
+                show_legend=False, label="Topic in Review 1", visible=False, value=None,
+                color_map=topic_color_map
+            )
+            topic_text2 = gr.HighlightedText(
+                show_legend=False, label="Topic in Review 2", visible=False, value=None,
+                color_map=topic_color_map
+            )
+            topic_text3 = gr.HighlightedText(
+                show_legend=False, label="Topic in Review 3", visible=False, value=None,
+                color_map=topic_color_map
+            )
+
+        # ---- CALLBACKS ----
+
+        # Fetch OpenReview reviews → show timer → process → swap to results
+        fetch_reviews_button.click(
+            fn=lambda: (
+                gr.update(value=FETCHING_HTML, visible=True),
+                gr.update(interactive=False),
+            ),
+            inputs=[],
+            outputs=[status_html, fetch_reviews_button]
+        ).then(
+            fn=fetch_openreview_reviews,
+            inputs=[openreview_link_input],
+            outputs=[review1_textbox, review2_textbox, review3_textbox, openreview_title, status_html]
+        ).then(
+            fn=lambda title: (
+                gr.update(visible=bool(title.strip())),
+                gr.update(value=PROCESSING_TIMER_HTML, visible=True),
+            ),
+            inputs=[openreview_title],
+            outputs=[openreview_title, status_html]
+        ).then(
+            fn=process_interactive_reviews,
+            inputs=[review1_textbox, review2_textbox, review3_textbox, focus_radio],
+            outputs=[
+                agreement_text1, agreement_text2, agreement_text3,
+                most_common, most_divergent,
+                polarity_text1, polarity_text2, polarity_text3,
+                topic_text1, topic_text2, topic_text3
+            ]
+        ).then(
+            fn=lambda: (
+                gr.update(visible=False),                    # hide input
+                gr.update(visible=True),                     # show results
+                gr.update(value="", visible=False),          # clear status
+                gr.update(interactive=True),                 # re-enable fetch button
+                gr.update(visible=True),                     # show "back to input" toggle
+                gr.update(visible=False),                    # hide "view results" toggle
+            ),
+            inputs=[],
+            outputs=[input_section, results_section, status_html, fetch_reviews_button, back_to_input_btn, view_results_btn]
+        )
+
+        # Process (Paste Reviews): show timer → run scoring → swap to results
+        submit_button.click(
+            fn=lambda: (
+                gr.update(value=PROCESSING_TIMER_HTML, visible=True),
+                gr.update(interactive=False),
+            ),
+            inputs=[],
+            outputs=[status_html, submit_button]
+        ).then(
+            fn=process_interactive_reviews,
+            inputs=[review1_textbox, review2_textbox, review3_textbox, focus_radio],
+            outputs=[
+                agreement_text1, agreement_text2, agreement_text3,
+                most_common, most_divergent,
+                polarity_text1, polarity_text2, polarity_text3,
+                topic_text1, topic_text2, topic_text3
+            ]
+        ).then(
+            fn=lambda: (
+                gr.update(visible=False),                    # hide input
+                gr.update(visible=True),                     # show results
+                gr.update(value="", visible=False),          # clear status
+                gr.update(interactive=True),                 # re-enable submit button
+                gr.update(visible=True),                     # show "back to input" toggle
+                gr.update(visible=False),                    # hide "view results" toggle
+            ),
+            inputs=[],
+            outputs=[input_section, results_section, status_html, submit_button, back_to_input_btn, view_results_btn]
+        )
+
+        # Top bar: Back to input
+        back_to_input_btn.click(
+            fn=lambda: (
+                gr.update(visible=True),                     # show input
+                gr.update(visible=False),                    # hide results
+                gr.update(visible=False),                    # hide "back to input"
+                gr.update(visible=True),                     # show "view results"
+            ),
+            inputs=[],
+            outputs=[input_section, results_section, back_to_input_btn, view_results_btn]
+        )
+
+        # Top bar: View Results (toggle back without re-processing)
+        view_results_btn.click(
+            fn=lambda: (
+                gr.update(visible=False),                    # hide input
+                gr.update(visible=True),                     # show results
+                gr.update(visible=True),                     # show "back to input"
+                gr.update(visible=False),                    # hide "view results"
+            ),
+            inputs=[],
+            outputs=[input_section, results_section, back_to_input_btn, view_results_btn]
+        )
+
+        # Clear button
+        clear_button.click(
+            fn=lambda: (None, None, None, "", "", None, None, None, None, None, None),
+            inputs=[],
+            outputs=[
+                review1_textbox, review2_textbox, review3_textbox,
+                most_common, most_divergent,
+                agreement_text1, agreement_text2, agreement_text3
+            ]
+        )
+
+        # Toggle display mode (Agreement / Polarity / Topic)
+        def toggle_display_mode(focus):
+            agreement_visible = (focus == "Agreement")
+            polarity_visible = (focus == "Polarity")
+            topic_visible = (focus == "Topic")
+            return (
+                gr.update(visible=agreement_visible), gr.update(visible=agreement_visible), gr.update(visible=agreement_visible),
+                gr.update(visible=polarity_visible), gr.update(visible=polarity_visible), gr.update(visible=polarity_visible),
+                gr.update(visible=topic_visible), gr.update(visible=topic_visible), gr.update(visible=topic_visible),
+            )
+
+        focus_radio.change(
+            fn=toggle_display_mode,
+            inputs=[focus_radio],
+            outputs=[
+                agreement_text1, agreement_text2, agreement_text3,
+                polarity_text1, polarity_text2, polarity_text3,
+                topic_text1, topic_text2, topic_text3,
+            ]
+        )
         
-        # def toggle_reviews(number_of_displayed_reviews):
-        #     number_of_displayed_reviews = int(number_of_displayed_reviews)
-        #     updates = []
-        #     # for review(i), set visible True if its index is <= n, otherwise False.
-        #     for i in range(1, 4): updates.append(gr.update(visible=(i <= number_of_displayed_reviews)))
-        #     return tuple(updates)
-
-        # review_count.change(
-        #     fn=toggle_reviews,
-        #     inputs=[review_count],
-        #     outputs=[review1_textbox, review2_textbox, review3_textbox]
-        # )
-        
-    demo.load(
-        fn=update_review_display,
-        inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
-    )          
-
 demo.launch(share=False)
