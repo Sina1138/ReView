@@ -35,13 +35,19 @@ git lfs install
 pip install -r requirements
 ```
 
+- (Optional) To enable fetching reviews directly from OpenReview links in the Interactive tab:
+``` bash
+pip install openreview-py
+```
+
 ## Running Interface Locally
 
 To run this interface locally, first, make sure `gradio` and all the requirements are installed in your environment. Then, you can run the following for a local instance of the interface:
 ```bash
-gradio ./interface/Demo.py
+python interface/Demo.py
 ```
 
+> **Note:** Do not use `gradio ./interface/Demo.py` (hot-reload mode), as it is currenlty incompatible with the interface's dynamic UI.
 
 Additionally, you can edit the last line of code for a shareable link of your local instance as desired (change `demo.launch(share=False)` to `demo.launch(share=True)`)
 
