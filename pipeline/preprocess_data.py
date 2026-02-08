@@ -4,10 +4,16 @@ Standalone preprocessing script for ICLR data with rebuttal support.
 Keeps glimpse-ui independent from the glimpse repository.
 """
 
+import sys
 import pandas as pd
 import os
 import re
 from pathlib import Path
+
+# Ensure sibling modules and project root are importable
+_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_dir), str(_dir.parent)]
+
 from config import Config
 
 # Convenience alias

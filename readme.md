@@ -55,6 +55,35 @@ Additionally, you can edit the last line of code for a shareable link of your lo
 
 For an up-to-date, concise, and brief introduction of the interface, you can check out the "Introduction" tab of the ReView app [here](https://huggingface.co/spaces/Sina1138/ReView)
 
+## Data Processing Pipeline
+
+All data processing scripts live in the `pipeline/` directory:
+
+| File | Purpose |
+|------|---------|
+| `pipeline/run_scoring.py` | Unified end-to-end pipeline orchestrator |
+| `pipeline/process_new_data.sh` | Shell entry point (forwards to `run_scoring.py`) |
+| `pipeline/fetch_iclr_data.py` | Fetch reviews from OpenReview API |
+| `pipeline/preprocess_data.py` | Text cleaning and preprocessing |
+| `pipeline/run_glimpse_scoring.py` | GLIMPSE consensuality/agreement scoring |
+| `pipeline/run_polarity_scoring.py` | Polarity/sentiment scoring |
+| `pipeline/run_topic_scoring.py` | Topic/aspect scoring |
+| `pipeline/scored_reviews_builder.py` | Integrate all scores into final dataset |
+| `pipeline/config.py` | Centralized configuration |
+
+The pipeline auto-detects available years from the `data/` directory. To process data for any year:
+
+```bash
+# Fetch data for a new year
+python pipeline/fetch_iclr_data.py --year 2026
+
+# Run the full scoring pipeline (auto-detects all available years)
+./pipeline/process_new_data.sh
+
+# Or run for a specific year
+./pipeline/process_new_data.sh --year 2026
+```
+
 ## Performance
 
 Since this project was built for deployment on Hugging Face Spaces, it is optimized to run on CPU. However, if better performance is needed, you can run this interface on a CUDA-enabled device and profit from the improved performance of the models in the interactive page. The code is set up to automatically use CUDA if available.

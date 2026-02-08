@@ -49,7 +49,7 @@ years_new, df_new = load_scored_reviews_with_rebuttals()
 
 if df_new.empty:
     raise FileNotFoundError(
-        f"No preprocessed dataset found. Run the pipeline first (process_new_data.sh)."
+        f"No preprocessed dataset found. Run the pipeline first (./pipeline/process_new_data.sh)."
     )
 
 # Use new data only

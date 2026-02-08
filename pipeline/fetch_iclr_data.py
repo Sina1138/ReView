@@ -321,7 +321,7 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=Path,
-        default=Path(__file__).parent / 'data',
+        default=Path(__file__).resolve().parent.parent / 'data',
         help='Output directory for CSV files'
     )
     parser.add_argument(

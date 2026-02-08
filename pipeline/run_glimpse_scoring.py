@@ -6,12 +6,18 @@ Handles candidate generation, RSA scoring, and CSV conversion automatically.
 
 import argparse
 import subprocess
+import sys
 import pickle
 import pandas as pd
 import json
 import re
 from pathlib import Path
 from tqdm import tqdm
+
+# Ensure sibling modules and project root are importable
+_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_dir), str(_dir.parent)]
+
 from config import Config
 
 # Convenience alias
@@ -43,7 +49,7 @@ def run_candidate_generation(year: int,
 
     # Run the glimpse candidate generation script
     cmd = [
-        "python", "glimpse/glimpse/data_loading/generate_extractive_candidates.py",
+        "python", str(Config.BASE_DIR / "glimpse/glimpse/data_loading/generate_extractive_candidates.py"),
         "--dataset_path", str(input_file),
         "--output_dir", str(output_dir),
         "--scripted-run"  # This makes it print the output path
@@ -91,7 +97,7 @@ def run_rsa_scoring(candidates_csv: Path,
     output_pk = output_dir / f"rsa_results_{year}.pk"
 
     cmd = [
-        "python", "glimpse/glimpse/src/compute_rsa.py",
+        "python", str(Config.BASE_DIR / "glimpse/glimpse/src/compute_rsa.py"),
         "--summaries", str(candidates_csv),
         "--model_name", model_name,
         "--output_dir", str(output_dir),

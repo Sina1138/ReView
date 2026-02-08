@@ -12,20 +12,21 @@ Pipeline steps:
     [4] Final integration with all scores merged
 
 Usage:
-    python run_scoring.py --year 2020              # Full pipeline for single year
-    python run_scoring.py                          # Auto-detect all available years
-    python run_scoring.py --force                  # Reprocess everything
-    python run_scoring.py --skip-preprocess        # Skip preprocessing (if already done)
-    python run_scoring.py --skip-glimpse           # Skip GLIMPSE, just polarity/topic
-    python run_scoring.py --year 2020 --limit 10   # Test with 10 reviews
+    python pipeline/run_scoring.py --year 2020              # Full pipeline for single year
+    python pipeline/run_scoring.py                          # Auto-detect all available years
+    python pipeline/run_scoring.py --force                  # Reprocess everything
+    python pipeline/run_scoring.py --skip-preprocess        # Skip preprocessing (if already done)
+    python pipeline/run_scoring.py --skip-glimpse           # Skip GLIMPSE, just polarity/topic
+    python pipeline/run_scoring.py --year 2020 --limit 10   # Test with 10 reviews
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure sibling modules and project root are importable
+_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_dir), str(_dir.parent)]
 
 from config import Config
 from dependencies.scoring_utils import find_available_years

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clean polarity scoring pipeline for ICLR review data.
+Clean topic scoring pipeline for ICLR review data.
 Supports multiple model variants (SciBERT, DeBERTa, SciBERTa) and auto-detects available years.
 """
 
@@ -10,21 +10,23 @@ import torch
 from pathlib import Path
 from tqdm import tqdm
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent))
+# Ensure sibling modules and project root are importable
+_dir = Path(__file__).resolve().parent
+sys.path[:0] = [str(_dir), str(_dir.parent)]
 
 from config import Config
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 from dependencies.scoring_utils import (
     find_available_years,
-    load_polarity_model,
+    load_topic_model,
     predict_batch,
-    save_polarity_results,
+    save_topic_results,
     validate_input_file,
+    TOPIC_ID_TO_LABEL,
 )
 
 
-def score_reviews_polarity(
+def score_reviews_topic(
     year: int,
     model_variant: str = "scibert",
     device: str = "cuda",
@@ -34,7 +36,7 @@ def score_reviews_polarity(
     limit: int = None,
 ) -> Path:
     """
-    Score reviews for polarity using specified model variant.
+    Score reviews for topic using specified model variant.
     
     Args:
         year: Year of reviews to score
@@ -51,17 +53,17 @@ def score_reviews_polarity(
     if input_dir is None:
         input_dir = Config.BASE_DIR / "data" / "processed"
     if output_dir is None:
-        output_dir = Config.POLARITY_DIR
+        output_dir = Config.TOPIC_DIR
     
-    output_path = output_dir / f"polarity_scored_reviews_{year}.csv"
+    output_path = output_dir / f"topic_scored_reviews_{year}.csv"
     
     # Skip if already exists and not forced
     if skip_if_exists and output_path.exists():
-        print(f"⏩ Polarity scores already exist for {year}: {output_path}")
+        print(f"⏩ Topic scores already exist for {year}: {output_path}")
         return output_path
     
     print(f"\n{'='*60}")
-    print(f"Polarity Scoring: {year}")
+    print(f"Topic Scoring: {year}")
     print(f"  Model: {model_variant}")
     print(f"  Device: {device}")
     if limit:
@@ -84,7 +86,7 @@ def score_reviews_polarity(
     # Load model
     try:
         print(f"Loading {model_variant} model...")
-        tokenizer, model, device_obj = load_polarity_model(
+        tokenizer, model, device_obj = load_topic_model(
             model_variant, Config.BASE_DIR, device
         )
     except (ValueError, FileNotFoundError) as e:
@@ -103,25 +105,27 @@ def score_reviews_polarity(
         if not sentences:
             continue
         
-        # Predict polarity for all sentences in batch
+        # Predict topic for all sentences in batch
         try:
             predictions = predict_batch(sentences, tokenizer, model, device_obj)
         except RuntimeError as e:
             print(f"✗ Prediction failed for review {review_id}: {e}")
             raise
         
-        # Store results
-        for sentence, polarity_label in zip(sentences, predictions):
+        # Store results with both numeric ID and label
+        for sentence, topic_id in zip(sentences, predictions):
+            topic_label = TOPIC_ID_TO_LABEL.get(topic_id, "UNKNOWN")
             all_results.append({
                 "id": review_id,
                 "sentence": sentence,
-                "polarity": polarity_label,
+                "topic_id": topic_id,
+                "topic": topic_label,
             })
     
     # Save results
     try:
-        save_polarity_results(output_path, all_results)
-        print(f"✓ Polarity scores saved: {output_path}")
+        save_topic_results(output_path, all_results)
+        print(f"✓ Topic scores saved: {output_path}")
         print(f"  Scored sentences: {len(all_results)}")
     except Exception as e:
         print(f"✗ Failed to save results: {e}")
@@ -132,7 +136,7 @@ def score_reviews_polarity(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Polarity scoring pipeline for ICLR review data"
+        description="Topic scoring pipeline for ICLR review data"
     )
     parser.add_argument(
         "--year",
@@ -174,7 +178,7 @@ def main():
     
     # Print summary
     print(f"\n{'='*60}")
-    print(f"Polarity Scoring Pipeline")
+    print(f"Topic Scoring Pipeline")
     print(f"Years: {years}")
     print(f"Model: {args.model}")
     print(f"Device: {args.device}")
@@ -186,7 +190,7 @@ def main():
     
     for year in years:
         try:
-            score_reviews_polarity(
+            score_reviews_topic(
                 year,
                 model_variant=args.model,
                 device=args.device,

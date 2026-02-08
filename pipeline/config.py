@@ -9,8 +9,8 @@ from pathlib import Path
 class Config:
     """Configuration for ReView data processing."""
 
-    # Directories
-    BASE_DIR = Path(__file__).resolve().parent
+    # Directories (BASE_DIR = project root, one level above pipeline/)
+    BASE_DIR = Path(__file__).resolve().parent.parent
     DATA_DIR = BASE_DIR / "glimpse" / "data"
     PROCESSED_DIR = DATA_DIR / "processed"
     OUTPUT_DIR = BASE_DIR / "data"
