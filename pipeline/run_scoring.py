@@ -124,8 +124,10 @@ def run_full_pipeline(
         return True
     
     except Exception as e:
+        import traceback
         print(f"\n{'='*60}")
         print(f"✗ Pipeline failed for {year}: {e}")
+        traceback.print_exc()
         print(f"{'='*60}")
         return False
 

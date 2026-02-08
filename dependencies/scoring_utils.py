@@ -31,42 +31,50 @@ def find_available_years(data_dir: Path) -> list:
     return sorted(years)
 
 
-def load_model_and_tokenizer(model_dir: Path, device: str = "cuda"):
-    """
-    Load a model and tokenizer from a local directory.
-    
-    Args:
-        model_dir: Path to directory containing model (config.json, pytorch_model.bin, etc.)
-        device: Device to load model onto ("cuda" or "cpu")
-        
-    Returns:
-        Tuple of (tokenizer, model)
-        
-    Raises:
-        FileNotFoundError: If model directory doesn't exist or is missing model files
-    """
+def _local_model_available(model_dir: Path) -> bool:
+    """Check if a local model directory has the required files."""
     if not model_dir.exists():
-        raise FileNotFoundError(f"Model directory not found: {model_dir}")
-    
-    # Check for required files
-    required_files = ["config.json", "pytorch_model.bin"]
-    for required_file in required_files:
-        if not (model_dir / required_file).exists():
-            raise FileNotFoundError(f"Missing {required_file} in {model_dir}")
-    
+        return False
+    # Accept either pytorch_model.bin or safetensors
+    has_weights = (model_dir / "pytorch_model.bin").exists() or (model_dir / "model.safetensors").exists()
+    return has_weights and (model_dir / "config.json").exists()
+
+
+def load_model_and_tokenizer(model_dir: Path, device: str = "cuda", hub_fallback: str = None):
+    """
+    Load a model and tokenizer from a local directory, or fall back to HuggingFace Hub.
+
+    Args:
+        model_dir: Path to local model directory
+        device: Device to load model onto ("cuda" or "cpu")
+        hub_fallback: HuggingFace Hub model ID to use if local files are missing
+
+    Returns:
+        Tuple of (tokenizer, model, device_obj)
+    """
+    model_source = str(model_dir)
+
+    if not _local_model_available(model_dir):
+        if hub_fallback:
+            print(f"  Local model not found at {model_dir}")
+            print(f"  Falling back to HuggingFace Hub: {hub_fallback}")
+            model_source = hub_fallback
+        else:
+            raise FileNotFoundError(f"Model not found at {model_dir} and no hub fallback configured")
+
     try:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir))
-        model = AutoModelForSequenceClassification.from_pretrained(str(model_dir))
+        tokenizer = AutoTokenizer.from_pretrained(model_source)
+        model = AutoModelForSequenceClassification.from_pretrained(model_source)
         model.eval()
-        
+
         # Move to device
         device_obj = torch.device(device if torch.cuda.is_available() else "cpu")
         model.to(device_obj)
-        
+
         return tokenizer, model, device_obj
-    
+
     except Exception as e:
-        raise RuntimeError(f"Failed to load model from {model_dir}: {e}")
+        raise RuntimeError(f"Failed to load model from {model_source}: {e}")
 
 
 def predict_batch(sentences: list, tokenizer, model, device, max_length: int = 512) -> list:
@@ -199,15 +207,18 @@ def load_polarity_model(model_variant: str, base_dir: Path, device: str = "cuda"
         "deberta": base_dir / "alternative_polarity" / "deberta" / "deberta_v3_base_polarity_final_model",
         "scideberta": base_dir / "alternative_polarity" / "scideberta" / "scideberta_full_polarity_final_model",
     }
-    
+    hub_fallback_map = {
+        "scibert": "Sina1138/Scibert_polarity_Review",
+    }
+
     if model_variant not in variant_map:
         raise ValueError(
             f"Unknown polarity model variant: {model_variant}. "
             f"Supported: {list(variant_map.keys())}"
         )
-    
+
     model_dir = variant_map[model_variant]
-    return load_model_and_tokenizer(model_dir, device)
+    return load_model_and_tokenizer(model_dir, device, hub_fallback=hub_fallback_map.get(model_variant))
 
 
 def load_topic_model(model_variant: str, base_dir: Path, device: str = "cuda"):
@@ -236,15 +247,18 @@ def load_topic_model(model_variant: str, base_dir: Path, device: str = "cuda"):
         "deberta": base_dir / "alternative_topic" / "deberta" / "final_model",
         "scideberta": base_dir / "alternative_topic" / "scideberta" / "final_model",
     }
-    
+    hub_fallback_map = {
+        "scibert": "Sina1138/SciDeberta_Review",
+    }
+
     if model_variant not in variant_map:
         raise ValueError(
             f"Unknown topic model variant: {model_variant}. "
             f"Supported: {list(variant_map.keys())}"
         )
-    
+
     model_dir = variant_map[model_variant]
-    return load_model_and_tokenizer(model_dir, device)
+    return load_model_and_tokenizer(model_dir, device, hub_fallback=hub_fallback_map.get(model_variant))
 
 
 # Topic label mapping
