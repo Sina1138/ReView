@@ -65,6 +65,14 @@ def get_preprocessed_scores(year):
     return scored_reviews
 
 
+def get_preprocessed_metadata(year):
+    row = all_scored_reviews_df[all_scored_reviews_df["year"] == year]
+    if "metadata" in row.columns and not row.empty:
+        meta = row["metadata"].iloc[0]
+        return meta if isinstance(meta, dict) else {}
+    return {}
+
+
 # -----------------------------------
 # Interactive Tab Configuration
 # -----------------------------------
@@ -113,7 +121,7 @@ Use this tab to explore reviews from ICLR ({year_range_str}):
    - **Topic**: Highlights comments by discussion topic using color-coded labels.
 #### Interactive Tab
 Use this tab to analyze your own review text:
-1. **Enter up to three reviews** in the input fields labeled *Review 1*, *Review 2*, and *Review 3*.
+1. **Enter 2–6 reviews** in the input fields. Use the **➕ Add Review** button to add up to 6 reviews.
 2. **Click "Process"** to analyze the input (average processing time: ~42 seconds).
 3. **Explore the results** using the same highlighting options as above (Agreement, Polarity, Topic).
 """
@@ -172,35 +180,40 @@ def get_interactive_processor():
     return _interactive_processor
 
 
-def fetch_openreview_reviews(link: str) -> Tuple[str, str, str, str, str]:
+MAX_INTERACTIVE_REVIEWS = 6
+
+
+def fetch_openreview_reviews(link: str):
     """
     Fetch reviews from OpenReview link and populate the textboxes.
 
     Returns:
-        Tuple of (review1, review2, review3, title, status_html)
+        Tuple of (review1..6, title, status_html)
     """
     print(f"\n[DEMO] fetch_openreview_reviews called with link: {link}")
 
+    empty = [""] * MAX_INTERACTIVE_REVIEWS
+
     if not link.strip():
-        return ("", "", "", "", _status_html("Please paste a valid OpenReview link", "error"))
+        return (*empty, "", _status_html("Please paste a valid OpenReview link", "error"))
 
     try:
         from interface.interactive_processor import fetch_reviews_from_openreview_link
         reviews, title = fetch_reviews_from_openreview_link(link)
         print(f"[DEMO] Got {len(reviews)} reviews from fetch function")
 
-        while len(reviews) < 3:
+        while len(reviews) < MAX_INTERACTIVE_REVIEWS:
             reviews.append("")
-        reviews = reviews[:3]
+        reviews = reviews[:MAX_INTERACTIVE_REVIEWS]
 
         num_reviews = len([r for r in reviews if r.strip()])
         status = _status_html(f"Fetched {num_reviews} reviews for: {title}", "success")
-        return (reviews[0], reviews[1], reviews[2], title, status)
+        return (*reviews, title, status)
 
     except ValueError as e:
         error_msg = str(e)
         print(f"[DEMO] ValueError caught: {error_msg}")
-        return ("", "", "", "", _status_html(error_msg, "warning"))
+        return (*empty, "", _status_html(error_msg, "warning"))
     except Exception as e:
         error_msg = str(e)
         print(f"[DEMO] Exception caught: {type(e).__name__}: {error_msg}")
@@ -212,18 +225,20 @@ def fetch_openreview_reviews(link: str) -> Tuple[str, str, str, str, str]:
         else:
             suggestion = ""
 
-        return ("", "", "", "", _status_html(f"{error_msg}{suggestion}", "error"))
+        return (*empty, "", _status_html(f"{error_msg}{suggestion}", "error"))
 
 
-def process_interactive_reviews(text1: str, text2: str, text3: str, focus: str, progress=gr.Progress()) -> Tuple:
+def process_interactive_reviews(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, progress=gr.Progress()) -> Tuple:
     """
-    Process reviews through the interactive pipeline with progress tracking.
+    Process up to 6 reviews through the interactive pipeline with progress tracking.
     """
     from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
-    # Validate input
-    if not text1.strip() and not text2.strip() and not text3.strip():
-        raise ValueError("Please enter at least one review")
+    all_texts = [text1, text2, text3, text4, text5, text6]
+    active_texts = [t for t in all_texts if t and t.strip()]
+
+    if len(active_texts) < 2:
+        raise ValueError("Please enter at least two reviews")
 
     # Step 1: Load models
     progress(0.0, desc="Loading models...")
@@ -231,14 +246,13 @@ def process_interactive_reviews(text1: str, text2: str, text3: str, focus: str, 
 
     # Step 2: Tokenize
     progress(0.10, desc="Tokenizing reviews...")
-    text1_sentences = [s for s in glimpse_tokenizer(text1) if s.strip()]
-    text2_sentences = [s for s in glimpse_tokenizer(text2) if s.strip()]
-    text3_sentences = [s for s in glimpse_tokenizer(text3) if s.strip()]
+    sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in active_texts]
+    sentence_lists = [sl for sl in sentence_lists if sl]
 
-    if not text1_sentences or not text2_sentences or not text3_sentences:
-        raise ValueError("One or more reviews are empty or have no valid sentences")
+    if len(sentence_lists) < 2:
+        raise ValueError("At least two reviews must have valid sentences")
 
-    all_sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+    all_sentences = list(set(s for sl in sentence_lists for s in sl))
 
     # Step 3: Polarity
     progress(0.20, desc="Predicting polarity...")
@@ -250,12 +264,11 @@ def process_interactive_reviews(text1: str, text2: str, text3: str, focus: str, 
 
     # Step 5: Consensuality (RSA) - the slow one
     progress(0.55, desc="Computing agreement (RSA reranking)...")
-    consensuality_map = processor.predict_consensuality(text1, text2, text3)
+    consensuality_map = processor.predict_consensuality(*active_texts)
 
     # Step 6: Format results
     progress(0.90, desc="Formatting results...")
 
-    # Most common / unique
     if consensuality_map:
         import pandas as _pd
         scores_series = _pd.Series(consensuality_map)
@@ -265,31 +278,48 @@ def process_interactive_reviews(text1: str, text2: str, text3: str, focus: str, 
         most_common_text = ""
         most_unique_text = ""
 
-    # Format highlighted outputs
     fmt = processor.format_highlighted_output
-    r1_agree = fmt(text1_sentences, consensuality_map, "consensuality")
-    r2_agree = fmt(text2_sentences, consensuality_map, "consensuality")
-    r3_agree = fmt(text3_sentences, consensuality_map, "consensuality")
-    r1_polar = fmt(text1_sentences, polarity_map, "polarity")
-    r2_polar = fmt(text2_sentences, polarity_map, "polarity")
-    r3_polar = fmt(text3_sentences, polarity_map, "polarity")
-    r1_topic = fmt(text1_sentences, topic_map, "topic")
-    r2_topic = fmt(text2_sentences, topic_map, "topic")
-    r3_topic = fmt(text3_sentences, topic_map, "topic")
+    # Build per-review outputs (pad inactive reviews with empty/hidden)
+    agree_out, polar_out, topic_out = [], [], []
+    for i in range(MAX_INTERACTIVE_REVIEWS):
+        if i < len(sentence_lists):
+            agree_out.append(gr.update(visible=True, value=fmt(sentence_lists[i], consensuality_map, "consensuality")))
+            polar_out.append(gr.update(visible=True, value=fmt(sentence_lists[i], polarity_map, "polarity")))
+            topic_out.append(gr.update(visible=True, value=fmt(sentence_lists[i], topic_map, "topic")))
+        else:
+            agree_out.append(gr.update(visible=False, value=None))
+            polar_out.append(gr.update(visible=False, value=None))
+            topic_out.append(gr.update(visible=False, value=None))
 
     progress(1.0, desc="Done!")
 
     return (
-        r1_agree, r2_agree, r3_agree,
+        *agree_out,
         most_common_text, most_unique_text,
-        r1_polar, r2_polar, r3_polar,
-        r1_topic, r2_topic, r3_topic,
+        *polar_out,
+        *topic_out,
+        len(sentence_lists),  # active review count → interactive_review_count
     )
 
 
 
 
-with gr.Blocks(title="ReView") as demo:
+CUSTOM_CSS = """
+.review-section-header h3 {
+    color: #1e40af;
+    border-left: 4px solid #3b82f6;
+    padding-left: 10px;
+    margin-top: 16px;
+}
+.rebuttal-section-header h3 {
+    color: #92400e;
+    border-left: 4px solid #f59e0b;
+    padding-left: 10px;
+    margin-top: 16px;
+}
+"""
+
+with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
     # gr.Markdown("# ReView Interface")
     
     with gr.Tab("Introduction"):
@@ -307,6 +337,7 @@ with gr.Blocks(title="ReView") as demo:
         initial_review_ids = list(initial_scored_reviews.keys())
         initial_review = initial_scored_reviews[initial_review_ids[0]]
         number_of_displayed_reviews = len(initial_scored_reviews[initial_review_ids[0]])
+        initial_metadata = get_preprocessed_metadata(initial_year)
         initial_state = {
             "year_choice": initial_year,
             "scored_reviews_for_year": initial_scored_reviews,
@@ -314,6 +345,7 @@ with gr.Blocks(title="ReView") as demo:
             "current_review_index": 0,
             "current_review": initial_review,
             "number_of_displayed_reviews": number_of_displayed_reviews,
+            "metadata_for_year": initial_metadata,
         }
         state = gr.State(initial_state)
 
@@ -350,7 +382,7 @@ with gr.Blocks(title="ReView") as demo:
             review_updates = []
             consensuality_dict = {}
 
-            for i in range(8):
+            for i in range(10):
                 if i < number_of_displayed_reviews:
                     review_item = list(current_review[i].items())
 
@@ -410,6 +442,14 @@ with gr.Blocks(title="ReView") as demo:
                         )
                     )
 
+            # Rebuttal display
+            current_forum_id = review_ids[current_index]
+            paper_metadata = state.get("metadata_for_year", {}).get(current_forum_id, {})
+            rebuttal_text = paper_metadata.get("rebuttal", "") or ""
+            has_rebuttal = bool(rebuttal_text.strip())
+            rebuttal_header_update = gr.update(visible=has_rebuttal)
+            rebuttal_display_update = gr.update(visible=has_rebuttal, value=rebuttal_text if has_rebuttal else "")
+
             # Set most consensual / unique sentences
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
@@ -451,6 +491,8 @@ with gr.Blocks(title="ReView") as demo:
                 most_common_visibility,
                 most_unique_visibility,
                 topic_color_map_visibility,
+                rebuttal_header_update,
+                rebuttal_display_update,
                 state
             )
 
@@ -458,7 +500,7 @@ with gr.Blocks(title="ReView") as demo:
 
         # Precompute the initial outputs so something is shown on load.
         init_display = update_review_display(initial_state, score_type="Original")
-        # init_display returns: (review_id, review1, review2, review3, review4, review5, review6, review7, review8, state)
+        # init_display returns: (review_id, review1..10, most_common, most_unique, topic_box, rebuttal_header, rebuttal_display, state)
 
         with gr.Row():
             
@@ -502,67 +544,26 @@ with gr.Blocks(title="ReView") as demo:
             show_legend=True,
         )
         
-        review1 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 1",
-            visible= number_of_displayed_reviews >= 1,
-            key="initial_review1",
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review2 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 2",
-            visible= number_of_displayed_reviews >= 2,
-            key="initial_review2"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review3 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 3",
-            visible= number_of_displayed_reviews >= 3,
-            key="initial_review3"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review4 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 4",
-            visible= number_of_displayed_reviews >= 4,
-            key="initial_review4"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review5 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 5",
-            visible= number_of_displayed_reviews >= 5,
-            key="initial_review5"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review6 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 6",
-            visible= number_of_displayed_reviews >= 6,
-            key="initial_review6"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review7 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 7",
-            visible= number_of_displayed_reviews >= 7,
-            key="initial_review7"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
-        review8 = gr.HighlightedText(
-            show_legend=False,
-            label="Review 8",
-            visible= number_of_displayed_reviews >= 8,
-            key="initial_review8"
-            # color_map={"Positive": "#d4fcd6", "Negative": "#fcd6d6"}
-        )
+        gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
+        review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
+        review2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=number_of_displayed_reviews >= 2, key="initial_review2")
+        review3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=number_of_displayed_reviews >= 3, key="initial_review3")
+        review4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=number_of_displayed_reviews >= 4, key="initial_review4")
+        review5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=number_of_displayed_reviews >= 5, key="initial_review5")
+        review6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=number_of_displayed_reviews >= 6, key="initial_review6")
+        review7 = gr.HighlightedText(show_legend=False, label="📝 Review 7", visible=number_of_displayed_reviews >= 7, key="initial_review7")
+        review8 = gr.HighlightedText(show_legend=False, label="📝 Review 8", visible=number_of_displayed_reviews >= 8, key="initial_review8")
+        review9 = gr.HighlightedText(show_legend=False, label="📝 Review 9", visible=number_of_displayed_reviews >= 9, key="initial_review9")
+        review10 = gr.HighlightedText(show_legend=False, label="📝 Review 10", visible=number_of_displayed_reviews >= 10, key="initial_review10")
+
+        rebuttal_header = gr.Markdown("### 💬 Author Rebuttal", elem_classes=["rebuttal-section-header"], visible=False)
+        rebuttal_display = gr.Textbox(label="Author Rebuttal", interactive=False, lines=8, visible=False)
 
         # Callback functions that update state.
         def year_change(year, state, score_type):
             state["year_choice"] = year
             state["scored_reviews_for_year"] = get_preprocessed_scores(year)
+            state["metadata_for_year"] = get_preprocessed_metadata(year)
             state["review_ids"] = list(state["scored_reviews_for_year"].keys())
             state["current_review_index"] = 0
             state["current_review"] = state["scored_reviews_for_year"][state["review_ids"][0]]
@@ -579,26 +580,11 @@ with gr.Blocks(title="ReView") as demo:
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        year.change(
-            fn=year_change,
-            inputs=[year, state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
-        )
-        score_type.change(
-            fn=update_review_display,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
-        )
-        next_button.click(
-            fn=next_review,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
-        )
-        previous_button.click(
-            fn=previous_review,
-            inputs=[state, score_type],
-            outputs=[review_id, review1, review2, review3, review4, review5, review6, review7, review8, most_common_sentences, most_unique_sentences, topic_text_box, state]
-        )   
+        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, most_common_sentences, most_unique_sentences, topic_text_box, rebuttal_header, rebuttal_display, state]
+        year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
+        score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
+        next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
+        previous_button.click(fn=previous_review, inputs=[state, score_type], outputs=_review_outputs)   
         
         
         
@@ -619,10 +605,15 @@ with gr.Blocks(title="ReView") as demo:
 
             with gr.Tabs():
                 with gr.Tab("Paste Reviews"):
-                    review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="Review 1", interactive=True)
-                    review2_textbox = gr.Textbox(lines=5, value=EXAMPLES[1], label="Review 2", interactive=True)
-                    review3_textbox = gr.Textbox(lines=5, value=EXAMPLES[2], label="Review 3", interactive=True)
+                    review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="📝 Review 1", interactive=True)
+                    review2_textbox = gr.Textbox(lines=5, value=EXAMPLES[1], label="📝 Review 2", interactive=True)
+                    review3_textbox = gr.Textbox(lines=5, value=EXAMPLES[2], label="📝 Review 3", interactive=True)
+                    review4_textbox = gr.Textbox(lines=5, value="", label="📝 Review 4", interactive=True, visible=False)
+                    review5_textbox = gr.Textbox(lines=5, value="", label="📝 Review 5", interactive=True, visible=False)
+                    review6_textbox = gr.Textbox(lines=5, value="", label="📝 Review 6", interactive=True, visible=False)
+                    interactive_review_count = gr.State(3)
                     with gr.Row():
+                        add_review_btn = gr.Button("➕ Add Review", variant="secondary", interactive=True)
                         submit_button = gr.Button("Process", variant="primary", interactive=True)
                         clear_button = gr.Button("Clear", variant="secondary", interactive=True)
 
@@ -660,43 +651,37 @@ with gr.Blocks(title="ReView") as demo:
                     lines=4, label="Most Common Opinions", visible=True, value="", container=True
                 )
 
-            agreement_text1 = gr.HighlightedText(
-                show_legend=True, label="Agreement in Review 1", visible=True, value=None,
-            )
-            agreement_text2 = gr.HighlightedText(
-                show_legend=True, label="Agreement in Review 2", visible=True, value=None,
-            )
-            agreement_text3 = gr.HighlightedText(
-                show_legend=True, label="Agreement in Review 3", visible=True, value=None,
-            )
+            agreement_text1 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 1", visible=True, value=None)
+            agreement_text2 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 2", visible=True, value=None)
+            agreement_text3 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 3", visible=True, value=None)
+            agreement_text4 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 4", visible=False, value=None)
+            agreement_text5 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 5", visible=False, value=None)
+            agreement_text6 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 6", visible=False, value=None)
 
-            polarity_text1 = gr.HighlightedText(
-                show_legend=True, label="Polarity in Review 1", visible=False, value=None,
-                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
-            )
-            polarity_text2 = gr.HighlightedText(
-                show_legend=True, label="Polarity in Review 2", visible=False, value=None,
-                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
-            )
-            polarity_text3 = gr.HighlightedText(
-                show_legend=True, label="Polarity in Review 3", visible=False, value=None,
-                color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"}
-            )
+            polarity_text1 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 1", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
+            polarity_text2 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 2", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
+            polarity_text3 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 3", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
+            polarity_text4 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 4", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
+            polarity_text5 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 5", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
+            polarity_text6 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 6", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
 
-            topic_text1 = gr.HighlightedText(
-                show_legend=False, label="Topic in Review 1", visible=False, value=None,
-                color_map=topic_color_map
-            )
-            topic_text2 = gr.HighlightedText(
-                show_legend=False, label="Topic in Review 2", visible=False, value=None,
-                color_map=topic_color_map
-            )
-            topic_text3 = gr.HighlightedText(
-                show_legend=False, label="Topic in Review 3", visible=False, value=None,
-                color_map=topic_color_map
-            )
+            topic_text1 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 1", visible=False, value=None, color_map=topic_color_map)
+            topic_text2 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 2", visible=False, value=None, color_map=topic_color_map)
+            topic_text3 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 3", visible=False, value=None, color_map=topic_color_map)
+            topic_text4 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 4", visible=False, value=None, color_map=topic_color_map)
+            topic_text5 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 5", visible=False, value=None, color_map=topic_color_map)
+            topic_text6 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 6", visible=False, value=None, color_map=topic_color_map)
 
         # ---- CALLBACKS ----
+
+        _interactive_inputs = [review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox, focus_radio]
+        _interactive_outputs = [
+            agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+            most_common, most_divergent,
+            polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
+            topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
+            interactive_review_count,
+        ]
 
         # Fetch OpenReview reviews → show timer → process → swap to results
         fetch_reviews_button.click(
@@ -709,31 +694,30 @@ with gr.Blocks(title="ReView") as demo:
         ).then(
             fn=fetch_openreview_reviews,
             inputs=[openreview_link_input],
-            outputs=[review1_textbox, review2_textbox, review3_textbox, openreview_title, status_html]
+            outputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
+                     openreview_title, status_html]
         ).then(
-            fn=lambda title: (
+            fn=lambda r4, r5, r6, title: (
                 gr.update(visible=bool(title.strip())),
                 gr.update(value=PROCESSING_TIMER_HTML, visible=True),
+                gr.update(visible=bool(r4.strip())),
+                gr.update(visible=bool(r5.strip())),
+                gr.update(visible=bool(r6.strip())),
             ),
-            inputs=[openreview_title],
-            outputs=[openreview_title, status_html]
+            inputs=[review4_textbox, review5_textbox, review6_textbox, openreview_title],
+            outputs=[openreview_title, status_html, review4_textbox, review5_textbox, review6_textbox]
         ).then(
             fn=process_interactive_reviews,
-            inputs=[review1_textbox, review2_textbox, review3_textbox, focus_radio],
-            outputs=[
-                agreement_text1, agreement_text2, agreement_text3,
-                most_common, most_divergent,
-                polarity_text1, polarity_text2, polarity_text3,
-                topic_text1, topic_text2, topic_text3
-            ]
+            inputs=_interactive_inputs,
+            outputs=_interactive_outputs
         ).then(
             fn=lambda: (
-                gr.update(visible=False),                    # hide input
-                gr.update(visible=True),                     # show results
-                gr.update(value="", visible=False),          # clear status
-                gr.update(interactive=True),                 # re-enable fetch button
-                gr.update(visible=True),                     # show "back to input" toggle
-                gr.update(visible=False),                    # hide "view results" toggle
+                gr.update(visible=False),
+                gr.update(visible=True),
+                gr.update(value="", visible=False),
+                gr.update(interactive=True),
+                gr.update(visible=True),
+                gr.update(visible=False),
             ),
             inputs=[],
             outputs=[input_section, results_section, status_html, fetch_reviews_button, back_to_input_btn, view_results_btn]
@@ -749,21 +733,16 @@ with gr.Blocks(title="ReView") as demo:
             outputs=[status_html, submit_button]
         ).then(
             fn=process_interactive_reviews,
-            inputs=[review1_textbox, review2_textbox, review3_textbox, focus_radio],
-            outputs=[
-                agreement_text1, agreement_text2, agreement_text3,
-                most_common, most_divergent,
-                polarity_text1, polarity_text2, polarity_text3,
-                topic_text1, topic_text2, topic_text3
-            ]
+            inputs=_interactive_inputs,
+            outputs=_interactive_outputs
         ).then(
             fn=lambda: (
-                gr.update(visible=False),                    # hide input
-                gr.update(visible=True),                     # show results
-                gr.update(value="", visible=False),          # clear status
-                gr.update(interactive=True),                 # re-enable submit button
-                gr.update(visible=True),                     # show "back to input" toggle
-                gr.update(visible=False),                    # hide "view results" toggle
+                gr.update(visible=False),
+                gr.update(visible=True),
+                gr.update(value="", visible=False),
+                gr.update(interactive=True),
+                gr.update(visible=True),
+                gr.update(visible=False),
             ),
             inputs=[],
             outputs=[input_section, results_section, status_html, submit_button, back_to_input_btn, view_results_btn]
@@ -795,34 +774,55 @@ with gr.Blocks(title="ReView") as demo:
 
         # Clear button
         clear_button.click(
-            fn=lambda: (None, None, None, "", "", None, None, None, None, None, None),
+            fn=lambda: (
+                "", "", "", "", "", "",                          # clear all textboxes
+                3,                                               # reset count
+                "", "",                                          # clear most common/divergent
+                *([None] * 6), *([None] * 6), *([None] * 6),   # clear all output panels
+            ),
             inputs=[],
             outputs=[
-                review1_textbox, review2_textbox, review3_textbox,
+                review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
+                interactive_review_count,
                 most_common, most_divergent,
-                agreement_text1, agreement_text2, agreement_text3
+                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
+                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
             ]
+        ).then(
+            fn=lambda: (gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)),
+            inputs=[],
+            outputs=[review4_textbox, review5_textbox, review6_textbox]
         )
 
         # Toggle display mode (Agreement / Polarity / Topic)
-        def toggle_display_mode(focus):
-            agreement_visible = (focus == "Agreement")
-            polarity_visible = (focus == "Polarity")
-            topic_visible = (focus == "Topic")
-            return (
-                gr.update(visible=agreement_visible), gr.update(visible=agreement_visible), gr.update(visible=agreement_visible),
-                gr.update(visible=polarity_visible), gr.update(visible=polarity_visible), gr.update(visible=polarity_visible),
-                gr.update(visible=topic_visible), gr.update(visible=topic_visible), gr.update(visible=topic_visible),
+        def toggle_display_mode(focus, active_count):
+            return tuple(
+                gr.update(visible=(mode == focus and i < active_count))
+                for mode in ["Agreement", "Polarity", "Topic"]
+                for i in range(MAX_INTERACTIVE_REVIEWS)
             )
 
         focus_radio.change(
             fn=toggle_display_mode,
-            inputs=[focus_radio],
+            inputs=[focus_radio, interactive_review_count],
             outputs=[
-                agreement_text1, agreement_text2, agreement_text3,
-                polarity_text1, polarity_text2, polarity_text3,
-                topic_text1, topic_text2, topic_text3,
+                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
+                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
             ]
+        )
+
+        # Add Review button: show next hidden textbox (reviews 4-6)
+        def add_review(count):
+            new_count = min(count + 1, MAX_INTERACTIVE_REVIEWS)
+            vis = [gr.update(visible=(i + 4 <= new_count)) for i in range(MAX_INTERACTIVE_REVIEWS - 3)]
+            return (new_count, *vis)
+
+        add_review_btn.click(
+            fn=add_review,
+            inputs=[interactive_review_count],
+            outputs=[interactive_review_count, review4_textbox, review5_textbox, review6_textbox]
         )
         
 demo.launch(share=False)

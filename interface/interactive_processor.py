@@ -115,23 +115,24 @@ class InteractiveReviewProcessor:
 
     def predict_consensuality(
         self,
-        text1: str,
-        text2: str,
-        text3: str,
+        *texts: str,
         rationality: float = 1.0,
         iterations: int = 1
     ) -> Dict[str, float]:
         """
         Predict consensuality using RSA reranking.
+        Accepts 2+ review texts.
         Returns: {sentence: consensuality_score}
         """
-        # Tokenize reviews
-        text1_sentences = [s for s in glimpse_tokenizer(text1) if s.strip()]
-        text2_sentences = [s for s in glimpse_tokenizer(text2) if s.strip()]
-        text3_sentences = [s for s in glimpse_tokenizer(text3) if s.strip()]
+        texts = [t for t in texts if t and t.strip()]
+        if len(texts) < 2:
+            return {}
+
+        # Tokenize all reviews
+        all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
 
         # Get unique sentences
-        sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+        sentences = list(set(s for lst in all_sentence_lists for s in lst))
 
         if not sentences:
             return {}
@@ -141,7 +142,7 @@ class InteractiveReviewProcessor:
             self.rsa_model,
             self.rsa_tokenizer,
             candidates=sentences,
-            source_texts=[text1, text2, text3],
+            source_texts=list(texts),
             device=str(self.device),
             rationality=rationality,
         )
@@ -187,46 +188,46 @@ class InteractiveReviewProcessor:
 
     def process_reviews(
         self,
-        review1: str,
-        review2: str,
-        review3: str,
+        *reviews: str,
         focus: str = "Agreement"
     ) -> Dict:
         """
-        Process three reviews and return scored output.
+        Process 2-6 reviews and return scored output.
 
         Args:
-            review1, review2, review3: Review texts
+            reviews: Review texts (at least 2 required)
             focus: "Agreement", "Polarity", or "Topic"
 
         Returns:
-            Dictionary with formatted output for all three reviews
+            Dictionary with formatted output for all reviews
         """
-        # Tokenize reviews
-        text1_sentences = [s for s in glimpse_tokenizer(review1) if s.strip()]
-        text2_sentences = [s for s in glimpse_tokenizer(review2) if s.strip()]
-        text3_sentences = [s for s in glimpse_tokenizer(review3) if s.strip()]
+        reviews = [r for r in reviews if r and r.strip()]
+        if len(reviews) < 2:
+            raise ValueError("At least two non-empty reviews are required")
 
-        if not text1_sentences or not text2_sentences or not text3_sentences:
-            raise ValueError("One or more reviews are empty or have no valid sentences")
+        # Tokenize reviews
+        sentence_lists = [[s for s in glimpse_tokenizer(r) if s.strip()] for r in reviews]
+
+        if any(len(sl) == 0 for sl in sentence_lists):
+            raise ValueError("One or more reviews have no valid sentences")
 
         # Get unique sentences for scoring
-        all_sentences = list(set(text1_sentences + text2_sentences + text3_sentences))
+        all_sentences = list(set(s for sl in sentence_lists for s in sl))
 
         # Predict scores
         polarity_map = self.predict_polarity(all_sentences)
         topic_map = self.predict_topic(all_sentences)
-        consensuality_map = self.predict_consensuality(review1, review2, review3)
+        consensuality_map = self.predict_consensuality(*reviews)
 
         # Prepare output based on focus
         result = {
-            "review1_sentences": text1_sentences,
-            "review2_sentences": text2_sentences,
-            "review3_sentences": text3_sentences,
+            f"review{i+1}_sentences": sl for i, sl in enumerate(sentence_lists)
+        }
+        result.update({
             "consensuality_scores": consensuality_map,
             "polarity_scores": polarity_map,
             "topic_scores": topic_map,
-        }
+        })
 
         # Calculate most common and unique sentences
         if consensuality_map:
