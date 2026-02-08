@@ -35,7 +35,7 @@ from preprocess_data import preprocess_reviews_with_rebuttals
 from run_glimpse_scoring import run_glimpse_pipeline
 from run_polarity_scoring import score_reviews_polarity
 from run_topic_scoring import score_reviews_topic
-from scored_reviews_builder import build_2020_2025_dataset
+from scored_reviews_builder import build_dataset
 
 
 def run_full_pipeline(
@@ -112,7 +112,7 @@ def run_full_pipeline(
 
         # Step 4: Build Final Dataset (always rebuild to ensure latest data)
         print(f"\n[4/5] Building Final Integrated Dataset...")
-        build_2020_2025_dataset()
+        build_dataset()
 
         print(f"\n[5/5] ✓ Pipeline Complete")
         
@@ -248,7 +248,8 @@ def main():
     print(f"✓ Successful: {success_count}/{len(years)} years")
     if failed_years:
         print(f"✗ Failed: {failed_years}")
-    print(f"\n📊 Final dataset: data/preprocessed_scored_reviews_2020-2025.csv")
+    output_path = Config.find_preprocessed_csv()
+    print(f"\n📊 Final dataset: {output_path.relative_to(Config.BASE_DIR)}")
     print(f"   Ready for interface: python interface/Demo.py")
     print(f"{'='*60}\n")
     

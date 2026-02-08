@@ -12,13 +12,23 @@ import pandas as pd
 import ast
 from tqdm import tqdm
 
-# Load new reviews with rebuttals (2020-2025) - if available
-def load_scored_reviews_with_rebuttals(
-    csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2020-2025.csv"
-):
-    """Load 2022-2025 dataset with rebuttal metadata."""
+# Auto-detect the preprocessed dataset CSV
+def _find_preprocessed_csv() -> Path:
+    """Find the most recent preprocessed_scored_reviews_*.csv in the data dir."""
+    data_dir = BASE_DIR / "data"
+    candidates = sorted(data_dir.glob("preprocessed_scored_reviews_*.csv"))
+    if candidates:
+        return candidates[-1]  # Last alphabetically = latest year range
+    return data_dir / "preprocessed_scored_reviews.csv"
+
+
+def load_scored_reviews_with_rebuttals(csv_path: Path = None):
+    """Load dataset with rebuttal metadata. Auto-detects CSV if no path given."""
+    if csv_path is None:
+        csv_path = _find_preprocessed_csv()
+
     if not csv_path.exists():
-        return [], pd.DataFrame()  # Return empty if file doesn't exist
+        return [], pd.DataFrame()
 
     df = pd.read_csv(csv_path)
     tqdm.pandas(desc="Parsing scored_dict")
@@ -39,11 +49,12 @@ years_new, df_new = load_scored_reviews_with_rebuttals()
 
 if df_new.empty:
     raise FileNotFoundError(
-        "New dataset not found or empty. Expected data/preprocessed_scored_reviews_2020-2025.csv"
+        f"No preprocessed dataset found. Run the pipeline first (process_new_data.sh)."
     )
 
 # Use new data only
 years, all_scored_reviews_df = years_new, df_new
+year_range_str = f"{min(years)}–{max(years)}" if years else "N/A"
 
 # -----------------------------------
 # Pre-processed Tab
@@ -71,11 +82,11 @@ topic_color_map = {
 
 
 # GLIMPSE Home/Description Page
-glimpse_description = """
+glimpse_description = f"""
 # ReView: A Tool for Visualizing and Analyzing Scientific Reviews
 ## **Overview**
 ReView is a visualization tool designed to assist **area chairs** and **researchers** in efficiently analyzing scholarly reviews. The interface offers two main ways to explore scholarly reviews:
-- Pre-Processed Reviews: Explore real peer reviews from ICLR (2017–2021) with structured visualizations of sentiment, topics, and reviewer agreement.
+- Pre-Processed Reviews: Explore real peer reviews from ICLR ({year_range_str}) with structured visualizations of sentiment, topics, and reviewer agreement.
 - Interactive Tab: Enter your own reviews and view them analyzed in real time using the same NLP-powered highlighting options.
 All reviews are shown in their original, unaltered form, with visual overlays to help identify key insights such as disagreements, sentiment and common themes—reducing cognitive load and scrolling effort.
 ---
@@ -87,12 +98,12 @@ All reviews are shown in their original, unaltered form, with visual overlays to
 ## **Highlighting Options**
 - *Agreement:* Identifies both shared and conflicting points across reviews, helping to surface consensus and disagreement.
 - *Polarity:* Highlights positive and negative sentiments within the reviews to reveal tone and stance.
-- *Topic:* Organizes the review sentences by their discussed topics, ensuring coverage of diverse reviewer perspectives and improving clarity. 
+- *Topic:* Organizes the review sentences by their discussed topics, ensuring coverage of diverse reviewer perspectives and improving clarity.
 ---
 ### How to Use ReView
 ReView offers two main ways to explore peer reviews: using pre-processed reviews or by entering your own.
-#### 🗂️ Pre-Processed Reviews Tab
-Use this tab to explore reviews from ICLR (2017–2021):
+#### Pre-Processed Reviews Tab
+Use this tab to explore reviews from ICLR ({year_range_str}):
 1. **Select a conference year** from the dropdown menu on the right.
 2. **Navigate between submissions** using the *Next* and *Previous* buttons on the left.
 3. **Choose a highlighting view** using the radio buttons:
@@ -100,7 +111,7 @@ Use this tab to explore reviews from ICLR (2017–2021):
    - **Agreement**: Highlights consensus points in **red** and disagreements in **purple**.
    - **Polarity**: Highlights **positive** sentiment in **green** and **negative** sentiment in **red**.
    - **Topic**: Highlights comments by discussion topic using color-coded labels.
-#### ✍️ Interactive Tab
+#### Interactive Tab
 Use this tab to analyze your own review text:
 1. **Enter up to three reviews** in the input fields labeled *Review 1*, *Review 2*, and *Review 3*.
 2. **Click "Process"** to analyze the input (average processing time: ~42 seconds).

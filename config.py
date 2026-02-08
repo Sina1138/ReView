@@ -2,6 +2,7 @@
 Centralized configuration for ReView data pipeline.
 """
 
+import re
 from pathlib import Path
 
 
@@ -16,18 +17,8 @@ class Config:
     POLARITY_DIR = OUTPUT_DIR / "polarity_scored"
     TOPIC_DIR = OUTPUT_DIR / "topic_scored"
 
-    # Year ranges - LEGACY DATA (reference only, for documentation)
-    LEGACY_START_YEAR = 2017
-    LEGACY_END_YEAR = 2021
-
-    # Year ranges - NEW DATA (reference only, actual years are auto-detected)
-    # The system can work with any year - these are just for documentation
-    NEW_DATA_START_YEAR = 2020
-    NEW_DATA_END_YEAR = 2025
-
     # Output files
     LEGACY_PREPROCESSED = OUTPUT_DIR / "preprocessed_scored_reviews.csv"
-    NEW_PREPROCESSED = OUTPUT_DIR / "preprocessed_scored_reviews_2020-2025.csv"
 
     # Feature flags
     INCLUDE_REBUTTALS = True
@@ -43,16 +34,41 @@ class Config:
     RSA_MODEL = "sshleifer/distilbart-cnn-12-3"  # For GLIMPSE
 
     @classmethod
-    def get_legacy_years(cls):
-        """Get legacy year range (2017-2021)."""
-        return range(cls.LEGACY_START_YEAR, cls.LEGACY_END_YEAR + 1)
+    def find_available_years(cls, data_dir: Path = None) -> list:
+        """Auto-detect available years from all_reviews_YYYY.csv files in data_dir."""
+        if data_dir is None:
+            data_dir = cls.OUTPUT_DIR
+        years = []
+        for f in data_dir.glob("all_reviews_*.csv"):
+            match = re.search(r'all_reviews_(\d{4})\.csv', f.name)
+            if match:
+                years.append(int(match.group(1)))
+        return sorted(years)
 
     @classmethod
-    def get_new_years(cls):
-        """Get new data year range (2022-2025)."""
-        return range(cls.NEW_DATA_START_YEAR, cls.NEW_DATA_END_YEAR + 1)
+    def get_preprocessed_path(cls, years: list = None) -> Path:
+        """Get output CSV path based on the year range.
+
+        If years is None, auto-detects from data directory.
+        Produces filenames like preprocessed_scored_reviews_2020-2025.csv
+        """
+        if years is None:
+            years = cls.find_available_years()
+        if not years:
+            # Fallback to a generic name if no years detected
+            return cls.OUTPUT_DIR / "preprocessed_scored_reviews.csv"
+        return cls.OUTPUT_DIR / f"preprocessed_scored_reviews_{min(years)}-{max(years)}.csv"
 
     @classmethod
-    def get_all_years(cls):
-        """Get complete year range (2017-2025)."""
-        return range(cls.LEGACY_START_YEAR, cls.NEW_DATA_END_YEAR + 1)
+    def find_preprocessed_csv(cls) -> Path:
+        """Find the most recent preprocessed_scored_reviews_*.csv in the output dir.
+
+        Useful for the interface to locate the dataset without knowing the year range.
+        """
+        candidates = sorted(cls.OUTPUT_DIR.glob("preprocessed_scored_reviews_*.csv"))
+        if candidates:
+            return candidates[-1]  # Last alphabetically = latest year range
+        # Fallback to legacy
+        if cls.LEGACY_PREPROCESSED.exists():
+            return cls.LEGACY_PREPROCESSED
+        return cls.OUTPUT_DIR / "preprocessed_scored_reviews.csv"

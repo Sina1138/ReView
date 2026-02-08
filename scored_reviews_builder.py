@@ -121,22 +121,36 @@ def load_scored_reviews(csv_path: Path = BASE_DIR / "data" / "preprocessed_score
     return years, df
 
 
-def build_2020_2025_dataset(
-    start_year: int = 2020,
-    end_year: int = 2025,
-    input_dir: Path = BASE_DIR / "data" / "processed",  # Independent from glimpse!
+def build_dataset(
+    years: list = None,
+    input_dir: Path = BASE_DIR / "data" / "processed",
     scored_csv_dir: Path = BASE_DIR / "data",
     polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
     topic_dir: Path = BASE_DIR / "data" / "topic_scored",
-    output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews_2020-2025.csv",
+    output_csv_path: Path = None,
 ):
     """
-    Build preprocessed dataset for 2022-2025 with rebuttals.
-    Separate from legacy 2017-2021 pipeline.
+    Build preprocessed dataset with rebuttals for any set of years.
+    Auto-detects available years if none specified.
     """
+    if years is None:
+        # Auto-detect from processed data directory
+        import re
+        years = sorted(
+            int(re.search(r'all_reviews_(\d{4})\.csv', f.name).group(1))
+            for f in input_dir.glob("all_reviews_*.csv")
+            if re.search(r'all_reviews_(\d{4})\.csv', f.name)
+        )
+        if not years:
+            print("⚠ No processed data files found to build dataset from")
+            return
+
+    if output_csv_path is None:
+        output_csv_path = BASE_DIR / "data" / f"preprocessed_scored_reviews_{min(years)}-{max(years)}.csv"
+
     all_scored_reviews = []
 
-    for year in range(start_year, end_year + 1):
+    for year in years:
         print(f"Processing {year}...")
         try:
             original_csv_path = input_dir / f"all_reviews_{year}.csv"
@@ -170,7 +184,7 @@ def build_2020_2025_dataset(
                 if pd.isna(rebuttal):
                     rebuttal = ''
                 rebuttal_str = str(rebuttal) if rebuttal else ''
-                
+
                 review_metadata[review_id] = {
                     'rebuttal': rebuttal_str,
                     'paper_title': row.get('paper_title', '') if 'paper_title' in original_df.columns else '',
@@ -188,40 +202,30 @@ def build_2020_2025_dataset(
             import traceback
             traceback.print_exc()
 
-    # Save to separate CSV
+    # Save to CSV
     df = pd.DataFrame(all_scored_reviews)
     df.to_csv(output_csv_path, index=False)
-    print(f"\n✓ New dataset saved to: {output_csv_path}")
-    print(f"  Years included: {start_year}-{end_year}")
+    print(f"\n✓ Dataset saved to: {output_csv_path}")
+    print(f"  Years included: {min(years)}-{max(years)}")
     print(f"  File size: {output_csv_path.stat().st_size / 1024 / 1024:.1f} MB")
 
 
-if __name__ == "__main__":
-    # Add option to build new dataset
-    import sys
+# Backwards-compatible alias
+build_2020_2025_dataset = build_dataset
 
-    if len(sys.argv) > 1 and sys.argv[1] == '--new-data':
-        build_2020_2025_dataset()
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build preprocessed scored reviews dataset")
+    parser.add_argument("--new-data", action="store_true", help="Build dataset (auto-detects years)")
+    parser.add_argument("--years", type=int, nargs="+", help="Specific years to include (default: auto-detect)")
+    args = parser.parse_args()
+
+    if args.new_data or args.years:
+        build_dataset(years=args.years)
     else:
         # Original behavior for legacy data
-        # save_all_scored_reviews()
         years, all_scored_reviews_df = load_scored_reviews()
-        print (years)
-    
-        # Debugging sample output
-        sample_year = 2021
-
-        sample_df = all_scored_reviews_df[all_scored_reviews_df["year"] == sample_year]
-        review_dict = sample_df["scored_dict"].iloc[0]
-
-        print(f"\n=== Sample Review from {sample_year} ===")
-        for review_id, sentence_data_list in review_dict.items():
-            print(f"\nReview ID: {review_id}")
-            for sentence_dict in sentence_data_list:
-                for sentence, data in sentence_dict.items():
-                    print(f"  Sentence: {sentence}")
-                    for key, value in data.items():
-                        print(f"    → {key}: {value}")
-                break  # print only the first review's sentences
-            break  # only one review
+        print(years)
 

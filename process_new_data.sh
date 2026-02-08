@@ -1,36 +1,23 @@
 #!/bin/bash
 set -e  # Exit on error
 
+# ============================================================
+# ReView Data Processing Pipeline
+# ============================================================
+# Processes ICLR review data through the full scoring pipeline.
+# Auto-detects available years from data/ directory by default,
+# or accepts explicit year arguments.
+#
+# Usage:
+#   ./process_new_data.sh                     # Auto-detect all available years
+#   ./process_new_data.sh --year 2026         # Process a single year
+#   ./process_new_data.sh --year 2026 --force # Reprocess even if results exist
+#   ./process_new_data.sh --help              # Show all options
+# ============================================================
+
 echo "========================================"
-echo "Processing ICLR 2020-2025 Data Pipeline"
+echo "ReView Data Processing Pipeline"
 echo "========================================"
 
-# Step 1: Data preprocessing
-echo "Step 1: Preprocessing raw data..."
-python preprocess_data.py
-
-# Step 2: GLIMPSE scoring (RSA consensuality)
-echo "Step 2: Running GLIMPSE consensuality scoring..."
-python run_glimpse_scoring.py
-
-# Step 3: Polarity scoring
-echo "Step 3: Running polarity classification..."
-cd scibert/scibert_polarity
-# Note: May need to modify the year range in the script
-echo "⚠ Polarity scoring may need year range adjustment in scibert_polarity.py"
-# python scibert_polarity.py --start-year 2022 --end-year 2025
-cd ../..
-
-# Step 4: Topic scoring
-echo "Step 4: Running topic classification..."
-cd scibert/scibert_topic
-# Note: May need to modify the year range in the script
-echo "⚠ Topic scoring may need year range adjustment in scibert_topic.py"
-# python scibert_topic.py --start-year 2022 --end-year 2025
-cd ../..
-
-# Step 5: Build final preprocessed file
-echo "Step 5: Building preprocessed dataset..."
-python scored_reviews_builder.py --new-data
-
-echo "✓ Pipeline complete! Check data/preprocessed_scored_reviews_2020-2025.csv"
+# Forward all arguments to the unified scoring pipeline
+python run_scoring.py "$@"

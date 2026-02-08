@@ -89,4 +89,22 @@ def find_topic(start_year=2017, end_year=2021):
 
 
 if __name__ == "__main__":
-    find_topic()
+    import argparse
+    parser = argparse.ArgumentParser(description="Run topic scoring with SciBERT")
+    parser.add_argument("--start-year", type=int, default=None, help="Start year (default: auto-detect)")
+    parser.add_argument("--end-year", type=int, default=None, help="End year (default: auto-detect)")
+    args = parser.parse_args()
+
+    if args.start_year is not None and args.end_year is not None:
+        find_topic(start_year=args.start_year, end_year=args.end_year)
+    else:
+        import re
+        available = sorted(
+            int(re.search(r'all_reviews_(\d{4})\.csv', f.name).group(1))
+            for f in DATA_DIR.glob("all_reviews_*.csv")
+            if re.search(r'all_reviews_(\d{4})\.csv', f.name)
+        )
+        if available:
+            find_topic(start_year=min(available), end_year=max(available))
+        else:
+            print("No data files found in", DATA_DIR)

@@ -1,5 +1,5 @@
 """
-Fetch ICLR 2022-2025 reviews and rebuttals from OpenReview API.
+Fetch ICLR reviews and rebuttals from OpenReview API.
 Based on DISAPERE data_prep_lib.py patterns.
 """
 
@@ -46,16 +46,7 @@ class ICLRDataFetcher:
 
     def get_venue_id(self, year: int) -> str:
         """Get OpenReview venue ID for ICLR in a given year."""
-        # ICLR venue ID format changed over years
-        venue_formats = {
-            2020: 'ICLR.cc/2020/Conference',
-            2021: 'ICLR.cc/2021/Conference',
-            2022: 'ICLR.cc/2022/Conference',
-            2023: 'ICLR.cc/2023/Conference',
-            2024: 'ICLR.cc/2024/Conference',
-            2025: 'ICLR.cc/2025/Conference',
-        }
-        return venue_formats.get(year, f'ICLR.cc/{year}/Conference')
+        return f'ICLR.cc/{year}/Conference'
 
     def fetch_submissions(self, venue_id: str) -> List:
         """Fetch all submissions for a venue."""
@@ -222,7 +213,7 @@ class ICLRDataFetcher:
         Fetch all ICLR data for a given year.
 
         Args:
-            year: Conference year (2022-2025)
+            year: Conference year
             output_path: Where to save CSV (optional)
             limit: Limit number of papers to process (for testing)
 
@@ -301,8 +292,11 @@ class ICLRDataFetcher:
 
 
 def main():
-    """Fetch ICLR 2020-2025 data with rebuttals."""
+    """Fetch ICLR data with rebuttals."""
     import argparse
+    from datetime import datetime
+
+    current_year = datetime.now().year
 
     parser = argparse.ArgumentParser(
         description='Fetch ICLR review data from OpenReview API'
@@ -321,8 +315,8 @@ def main():
     parser.add_argument(
         '--end-year',
         type=int,
-        default=2025,
-        help='End year for batch fetch (default: 2025)'
+        default=current_year,
+        help=f'End year for batch fetch (default: {current_year})'
     )
     parser.add_argument(
         '--output-dir',
