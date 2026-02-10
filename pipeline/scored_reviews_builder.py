@@ -24,12 +24,22 @@ def preprocessed_scores(
         scored_csv_path: Path,
         polarity_csv_path: Path,
         topic_csv_path: Path,
+        raw_data_csv_path: Path = None,
     ) -> dict:
-    
+
     original_df = pd.read_csv(original_csv_path)
     scored_df = pd.read_csv(scored_csv_path)
     polarity_df = pd.read_csv(polarity_csv_path)
     topic_df = pd.read_csv(topic_csv_path)
+
+    # Load raw data for rebuttals if available
+    rebuttals_df = None
+    if raw_data_csv_path and raw_data_csv_path.exists():
+        try:
+            rebuttals_df = pd.read_csv(raw_data_csv_path)
+            print(f"Loaded rebuttals from {raw_data_csv_path}")
+        except Exception as e:
+            print(f"Warning: Could not load rebuttals from {raw_data_csv_path}: {e}")
 
     scored_reviews = {}
 
@@ -55,10 +65,18 @@ def preprocessed_scores(
         # Get polarity scores
         polarity_rows = polarity_df[polarity_df["id"] == review_id]
         polarity_dict = dict(zip(polarity_rows["sentence"], polarity_rows["polarity"]))
-        
+
         # Get topic scores
         topic_rows = topic_df[topic_df["id"] == review_id]
         topic_dict = dict(zip(topic_rows["sentence"], topic_rows["topic"]))
+
+        # Get rebuttal if available
+        rebuttal = ""
+        if rebuttals_df is not None and review_id in rebuttals_df["id"].values:
+            rebuttal_row = rebuttals_df[rebuttals_df["id"] == review_id]
+            if not rebuttal_row.empty and "rebuttal" in rebuttal_row.columns:
+                rebuttal_val = rebuttal_row["rebuttal"].iloc[0]
+                rebuttal = str(rebuttal_val) if pd.notna(rebuttal_val) else ""
 
         scored_sentences = {}
         for sentence in glimpse_tokenizer(review_text):
@@ -72,7 +90,10 @@ def preprocessed_scores(
             if sentence_data:
                 scored_sentences[sentence] = sentence_data
 
-        scored_reviews[review_id].append(scored_sentences)
+        scored_reviews[review_id].append({
+            "sentences": scored_sentences,
+            "rebuttal": rebuttal
+        })
 
     return scored_reviews
 
@@ -81,18 +102,20 @@ def save_all_scored_reviews(
         start_year: int = 2017,
         end_year: int = 2021,
         input_dir: Path = BASE_DIR / "glimpse" / "data" / "processed",
+        raw_data_dir: Path = BASE_DIR / "data",
         scored_csv_dir: Path = BASE_DIR / "data",
         polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
         topic_dir: Path = BASE_DIR / "data" / "topic_scored",
         output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews.csv",
     ):
-    
+
     all_scored_reviews = []
 
     for year in range(start_year, end_year + 1):
         print(f"Processing {year}...")
         try:
             original_csv_path = input_dir / f"all_reviews_{year}.csv"
+            raw_data_csv_path = raw_data_dir / f"all_reviews_{year}.csv"
             polarity_csv_path = polarity_dir / f"polarity_scored_reviews_{year}.csv"
             topic_csv_path = topic_dir / f"topic_scored_reviews_{year}.csv"
             scored_csv_path = scored_csv_dir / f"GLIMPSE_results_{year}.csv"
@@ -100,7 +123,8 @@ def save_all_scored_reviews(
                 original_csv_path,
                 scored_csv_path,
                 polarity_csv_path,
-                topic_csv_path
+                topic_csv_path,
+                raw_data_csv_path
             )
             all_scored_reviews.append({
                 "year": year,

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import torch
 import math
+import json
 from typing import List, Tuple, Dict, Optional
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
@@ -19,6 +20,21 @@ sys.path.insert(0, str(BASE_DIR))
 
 from dependencies.rsa_reranker import RSAReranking
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
+
+
+_HEADER_RE = re.compile(
+    r'^(\*{1,2}|#{1,3}\s*)?(summary|strengths?|weaknesses?|questions?|limitations?|minor|'
+    r'rating|confidence|correctness|clarity|originality|significance|'
+    r'pros?|cons?|comments?|suggestions?|conclusion|recommendation|'
+    r'contribution|technical\s+quality|presentation|reproducibility|'
+    r'novelty|experiments?|related\s+work|other|additional)\s*:?(\*{1,2})?$',
+    re.IGNORECASE
+)
+
+
+def is_section_header(sentence: str) -> bool:
+    """Return True if sentence is a structural section header (should be excluded from scoring)."""
+    return bool(_HEADER_RE.match(sentence.strip()))
 
 # Try to import OpenReview, but don't fail if not available
 try:
@@ -131,8 +147,8 @@ class InteractiveReviewProcessor:
         # Tokenize all reviews
         all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
 
-        # Get unique sentences
-        sentences = list(set(s for lst in all_sentence_lists for s in lst))
+        # Get unique sentences, excluding section headers
+        sentences = [s for s in set(s for lst in all_sentence_lists for s in lst) if not is_section_header(s)]
 
         if not sentences:
             return {}
@@ -170,12 +186,15 @@ class InteractiveReviewProcessor:
         Args:
             sentences: List of sentences in order
             scores_dict: Dictionary mapping sentences to scores
-            score_type: "consensuality", "polarity", or "topic"
+            score_type: "none", "consensuality", "polarity", or "topic"
 
         Returns:
             List of (sentence, score) tuples
         """
-        if score_type == "consensuality":
+        if score_type == "none":
+            # Show original text without any highlighting/scores
+            return [(s, None) for s in sentences]
+        elif score_type == "consensuality":
             return [
                 (s, scores_dict.get(s, 0.0) if isinstance(scores_dict.get(s), (int, float)) else None)
                 for s in sentences
@@ -211,8 +230,8 @@ class InteractiveReviewProcessor:
         if any(len(sl) == 0 for sl in sentence_lists):
             raise ValueError("One or more reviews have no valid sentences")
 
-        # Get unique sentences for scoring
-        all_sentences = list(set(s for sl in sentence_lists for s in sl))
+        # Get unique sentences for scoring, excluding section headers
+        all_sentences = [s for s in set(s for sl in sentence_lists for s in sl) if not is_section_header(s)]
 
         # Predict scores
         polarity_map = self.predict_polarity(all_sentences)
@@ -328,6 +347,7 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
         # Extract reviews - try multiple patterns
         print("[FETCH] Step 5: Extracting reviews...")
         reviews = []
+        review_id_to_num = {}  # Track note IDs for rebuttal linking
         review_patterns = ['Official_Review', 'Review', 'review']
 
         for i, note in enumerate(forum_notes):
@@ -353,9 +373,34 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
 
                 if review_text and isinstance(review_text, str) and review_text.strip():
                     reviews.append(review_text.strip())
+                    review_id_to_num[note.id] = len(reviews)  # Map note ID to review number (1-indexed)
                     print(f"[FETCH]     Review added (length: {len(review_text)} chars)")
 
         print(f"[FETCH] Step 6: Review extraction complete - found {len(reviews)} reviews")
+
+        # Extract rebuttals - look for author comments/responses
+        print("[FETCH] Step 6b: Extracting author rebuttals...")
+        rebuttals_structured = []
+        for note in forum_notes:
+            invitation = getattr(note, 'invitation', '')
+            if any(p in invitation for p in ['Official_Comment', 'Author_Comment', 'Comment']):
+                if hasattr(note, 'signatures') and any('Authors' in sig for sig in note.signatures):
+                    content = getattr(note, 'content', {})
+                    text = None
+                    for field in ['comment', 'rebuttal', 'title']:
+                        if isinstance(content, dict):
+                            text = content.get(field, '')
+                        if text and isinstance(text, str) and text.strip():
+                            break
+                    if text and text.strip():
+                        # Track which review this is replying to (if any)
+                        replyto = getattr(note, 'replyto', None)
+                        reply_num = review_id_to_num.get(replyto, None)
+                        rebuttals_structured.append({"text": text.strip(), "reply_to": reply_num})
+
+        # Serialize as JSON for structured display
+        rebuttal_text = json.dumps(rebuttals_structured) if rebuttals_structured else ""
+        print(f"[FETCH] Found {len(rebuttals_structured)} rebuttal(s)")
 
         if not reviews:
             print(f"[FETCH] ERROR: No reviews found. Total notes: {len(forum_notes)}")
@@ -371,8 +416,8 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
                            f"Found {len(forum_notes)} notes total. "
                            f"Make sure the link is to a paper with reviews.")
 
-        print(f"[FETCH] SUCCESS: Returning {len(reviews)} reviews and title: {title[:50]}")
-        return reviews, title
+        print(f"[FETCH] SUCCESS: Returning {len(reviews)} reviews, title: {title[:50]}, rebuttal: {len(rebuttal_text)} chars")
+        return reviews, title, rebuttal_text
 
     except ValueError as ve:
         print(f"[FETCH] ValueError raised: {str(ve)}")
