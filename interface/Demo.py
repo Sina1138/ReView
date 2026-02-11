@@ -543,19 +543,28 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
 
             number_of_displayed_reviews = len(current_review)
             review_updates = []
+            rebuttal_updates = []
             consensuality_dict = {}
-            all_rebuttals = []
 
             for i in range(10):
                 if i < number_of_displayed_reviews:
                     # Handle new structure: current_review[i] can be dict with "sentences" and "rebuttal"
                     # OR old structure: just a dict of sentences
                     review_data = current_review[i]
+                    rebuttal_html = ""
+
                     if isinstance(review_data, dict) and "sentences" in review_data:
                         review_item = list(review_data["sentences"].items())
                         rebuttal = review_data.get("rebuttal", "")
                         if rebuttal and rebuttal.strip():
-                            all_rebuttals.append(f"**Review {i+1} Rebuttal:**\n{rebuttal}")
+                            # Format rebuttal as HTML card
+                            rebuttal_html = (
+                                '<div style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
+                                '<div style="padding:10px 14px;">'
+                                '<div style="font-size:0.75em;color:#92400e;font-weight:600;margin-bottom:4px;">💬 Author Response:</div>'
+                                f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{rebuttal}</div>'
+                                '</div></div>'
+                            )
                     else:
                         # Backward compatibility with old format
                         review_item = list(review_data.items())
@@ -605,6 +614,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                             key=f"updated_{score_type}_{i}"
                         )
                     )
+                    rebuttal_updates.append(gr.update(visible=bool(rebuttal_html), value=rebuttal_html))
                 else:
                     review_updates.append(
                         gr.update(
@@ -615,20 +625,10 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                             key=f"updated_{score_type}_{i}"
                         )
                     )
+                    rebuttal_updates.append(gr.update(visible=False, value=""))
 
-            # Rebuttal display - use rebuttals from reviews if available, otherwise fall back to metadata
-            rebuttal_text = ""
-            if all_rebuttals:
-                rebuttal_text = "\n\n---\n\n".join(all_rebuttals)
-            else:
-                # Fallback to metadata for backward compatibility
-                current_forum_id = review_ids[current_index]
-                paper_metadata = state.get("metadata_for_year", {}).get(current_forum_id, {})
-                rebuttal_text = paper_metadata.get("rebuttal", "") or ""
-
-            has_rebuttal = bool(rebuttal_text.strip())
-            rebuttal_header_update = gr.update(visible=has_rebuttal)
-            rebuttal_display_update = gr.update(visible=has_rebuttal, value=rebuttal_text if has_rebuttal else "")
+            # General rebuttal display (currently unused in new format, kept for backward compat)
+            general_rebuttal_update = gr.update(visible=False, value="")
 
             # Set most consensual / unique sentences
             if show_consensuality and consensuality_dict:
@@ -671,8 +671,8 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 most_common_visibility,
                 most_unique_visibility,
                 topic_color_map_visibility,
-                rebuttal_header_update,
-                rebuttal_display_update,
+                *rebuttal_updates,  # 10 per-review rebuttals
+                general_rebuttal_update,  # General rebuttal section
                 state
             )
 
@@ -680,7 +680,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
 
         # Precompute the initial outputs so something is shown on load.
         init_display = update_review_display(initial_state, score_type="Original")
-        # init_display returns: (review_id, review1..10, most_common, most_unique, topic_box, rebuttal_header, rebuttal_display, state)
+        # init_display returns: (review_id, review1..10, most_common, most_unique, topic_box, prep_rebuttal1..10, prep_general_rebuttal, state)
 
         with gr.Row():
             
@@ -726,18 +726,28 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
         
         gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
         review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
+        prep_rebuttal1 = gr.HTML(visible=False, value="")
         review2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=number_of_displayed_reviews >= 2, key="initial_review2")
+        prep_rebuttal2 = gr.HTML(visible=False, value="")
         review3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=number_of_displayed_reviews >= 3, key="initial_review3")
+        prep_rebuttal3 = gr.HTML(visible=False, value="")
         review4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=number_of_displayed_reviews >= 4, key="initial_review4")
+        prep_rebuttal4 = gr.HTML(visible=False, value="")
         review5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=number_of_displayed_reviews >= 5, key="initial_review5")
+        prep_rebuttal5 = gr.HTML(visible=False, value="")
         review6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=number_of_displayed_reviews >= 6, key="initial_review6")
+        prep_rebuttal6 = gr.HTML(visible=False, value="")
         review7 = gr.HighlightedText(show_legend=False, label="📝 Review 7", visible=number_of_displayed_reviews >= 7, key="initial_review7")
+        prep_rebuttal7 = gr.HTML(visible=False, value="")
         review8 = gr.HighlightedText(show_legend=False, label="📝 Review 8", visible=number_of_displayed_reviews >= 8, key="initial_review8")
+        prep_rebuttal8 = gr.HTML(visible=False, value="")
         review9 = gr.HighlightedText(show_legend=False, label="📝 Review 9", visible=number_of_displayed_reviews >= 9, key="initial_review9")
+        prep_rebuttal9 = gr.HTML(visible=False, value="")
         review10 = gr.HighlightedText(show_legend=False, label="📝 Review 10", visible=number_of_displayed_reviews >= 10, key="initial_review10")
+        prep_rebuttal10 = gr.HTML(visible=False, value="")
 
-        rebuttal_header = gr.Markdown("### 💬 Author Rebuttal", elem_classes=["rebuttal-section-header"], visible=False)
-        rebuttal_display = gr.Textbox(label="Author Rebuttal", interactive=False, lines=8, visible=False)
+        # General rebuttal section (for rebuttals not tied to specific reviews)
+        prep_general_rebuttal = gr.HTML(visible=False, value="")
 
         # Callback functions that update state.
         def year_change(year, state, score_type):
@@ -760,7 +770,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, most_common_sentences, most_unique_sentences, topic_text_box, rebuttal_header, rebuttal_display, state]
+        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
         year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
         score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
         next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
