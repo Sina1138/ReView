@@ -375,3 +375,4 @@ data/DISAPERE_test.py
 .idea/
 *.sublime-project
 *.sublime-workspace
+validation/quick_check.py

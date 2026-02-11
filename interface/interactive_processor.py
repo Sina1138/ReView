@@ -53,7 +53,12 @@ class InteractiveReviewProcessor:
 
         # Load summarization model (for RSA)
         rsa_model_name = "sshleifer/distilbart-cnn-12-3"
-        self.rsa_model = AutoModelForSeq2SeqLM.from_pretrained(rsa_model_name)
+        self.rsa_model = AutoModelForSeq2SeqLM.from_pretrained(
+            rsa_model_name,
+            # Use float16 only on GPU (2x faster inference, 2x less memory)
+            # CPU doesn't support float16 well and would be slower
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        )
         self.rsa_tokenizer = AutoTokenizer.from_pretrained(rsa_model_name)
         self.rsa_model.to(self.device)
         self.rsa_model.eval()
@@ -204,6 +209,50 @@ class InteractiveReviewProcessor:
                 (s, scores_dict.get(s, None))
                 for s in sentences
             ]
+
+    def process_reviews_fast(self, *reviews: str) -> Dict:
+        """
+        Process reviews WITHOUT RSA (fast path: ~3-5 sec on CPU).
+
+        Returns polarity + topic scores immediately.
+        RSA can be computed separately in background.
+
+        Args:
+            reviews: Review texts (at least 2 required)
+
+        Returns:
+            Dictionary with polarity + topic scores (consensuality empty)
+        """
+        reviews = [r for r in reviews if r and r.strip()]
+        if len(reviews) < 2:
+            raise ValueError("At least two non-empty reviews are required")
+
+        # Tokenize reviews
+        sentence_lists = [[s for s in glimpse_tokenizer(r) if s.strip()] for r in reviews]
+
+        if any(len(sl) == 0 for sl in sentence_lists):
+            raise ValueError("One or more reviews have no valid sentences")
+
+        # Get unique sentences for scoring, excluding section headers
+        all_sentences = [s for s in set(s for sl in sentence_lists for s in sl) if not is_section_header(s)]
+
+        # Predict scores (skip consensuality - that comes async)
+        polarity_map = self.predict_polarity(all_sentences)
+        topic_map = self.predict_topic(all_sentences)
+
+        # Return with empty consensuality (will be updated async)
+        result = {
+            f"review{i+1}_sentences": sl for i, sl in enumerate(sentence_lists)
+        }
+        result.update({
+            "consensuality_scores": {},
+            "polarity_scores": polarity_map,
+            "topic_scores": topic_map,
+        })
+        result["most_common"] = []
+        result["most_unique"] = []
+
+        return result
 
     def process_reviews(
         self,

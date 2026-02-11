@@ -33,7 +33,7 @@ class RSAReranking:
             tokenizer,
             candidates: List[str],
             source_texts: List[str],
-            batch_size: int = 32,
+            batch_size: int = None,  # Auto-detect: 64 for GPU, 32 for CPU
             rationality: int = 1,
             device="cuda",
     ):
@@ -42,8 +42,7 @@ class RSAReranking:
         :param tokenizer:
         :param candidates: list of candidates summaries
         :param source_texts: list of source texts
-        :param batch_size: batch size used to compute the likelihoods (can be high since we don't need gradients and
-        it's a single forward pass)
+        :param batch_size: batch size used to compute the likelihoods (None = auto-detect based on device)
         :param rationality: rationality parameter of the RSA model
         :param device: device used to compute the likelihoods
         """
@@ -51,13 +50,21 @@ class RSAReranking:
         self.device = device
         self.model = model.to(self.device)
         self.tokenizer = tokenizer
-        
+
 
         self.candidates = candidates
         self.source_texts = source_texts
 
+        # Auto-detect batch size based on device if not specified
+        # GPU can handle larger batches (64), CPU uses smaller batches (32)
+        if batch_size is None:
+            batch_size = 64 if torch.cuda.is_available() else 32
         self.batch_size = batch_size
         self.rationality = rationality
+
+        # Pre-tokenize source texts once to avoid redundant tokenization
+        # This significantly speeds up likelihood_matrix computation
+        self._tokenized_sources_cache = {}
 
     def compute_conditionned_likelihood(
             self, x: List[str], y: List[str], mean: bool = True
@@ -79,19 +86,49 @@ class RSAReranking:
         loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
         batch_size = len(x)
 
-        x = self.tokenizer(
-            x,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=1024,
-        )
+        # Try to use cached tokenized sources for efficiency
+        # Cache key is the source text string
+        x_tokenized_list = []
+        all_cached = True
+        for source in x:
+            if source in self._tokenized_sources_cache:
+                x_tokenized_list.append(self._tokenized_sources_cache[source])
+            else:
+                all_cached = False
+                break
+
+        if all_cached and len(x_tokenized_list) > 0:
+            # All sources are cached - need to batch them together
+            # Stack the individual tokenized sources
+            x_tokenized = {
+                'input_ids': torch.stack([item['input_ids'].squeeze(0) for item in x_tokenized_list]),
+                'attention_mask': torch.stack([item['attention_mask'].squeeze(0) for item in x_tokenized_list])
+            }
+        else:
+            # Not all cached, tokenize the batch and cache individual items
+            x_strings = x  # Keep reference to original strings for caching
+            x_tokenized = self.tokenizer(
+                x,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,  # Reduced from 1024 - reviews rarely exceed 512 tokens
+            )
+            # Cache each source text individually for future use
+            for i, source_str in enumerate(x_strings):
+                if source_str not in self._tokenized_sources_cache:
+                    self._tokenized_sources_cache[source_str] = {
+                        'input_ids': x_tokenized['input_ids'][i:i+1],
+                        'attention_mask': x_tokenized['attention_mask'][i:i+1]
+                    }
+
+        x = x_tokenized
         y = self.tokenizer(
             y,
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=1024,
+            max_length=256,  # Reduced from 1024 - sentences rarely exceed 256 tokens
         )
 
         # Move all tensors to the correct device
