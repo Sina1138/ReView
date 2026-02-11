@@ -37,11 +37,14 @@ def preprocessed_scores(
     if raw_data_csv_path and raw_data_csv_path.exists():
         try:
             rebuttals_df = pd.read_csv(raw_data_csv_path)
+            rebuttal_count = rebuttals_df['rebuttal'].notna().sum() if 'rebuttal' in rebuttals_df.columns else 0
             print(f"Loaded rebuttals from {raw_data_csv_path}")
+            print(f"  Found {len(rebuttals_df)} rows, {rebuttal_count} with non-null rebuttals")
         except Exception as e:
             print(f"Warning: Could not load rebuttals from {raw_data_csv_path}: {e}")
 
     scored_reviews = {}
+    submission_review_counters = {}  # Track which review # we're on for each submission
 
     for _, row in tqdm(original_df.iterrows(), total=len(original_df)):
         review_id = row["id"]
@@ -52,6 +55,14 @@ def preprocessed_scores(
 
         if review_id not in scored_reviews:
             scored_reviews[review_id] = []
+
+        # Track review number for this submission
+        if review_id not in submission_review_counters:
+            submission_review_counters[review_id] = 0
+        else:
+            submission_review_counters[review_id] += 1
+
+        review_num = submission_review_counters[review_id]
 
         # Get consensuality scores
         consensuality_scores_str = scored_df[scored_df["id"] == review_id]["consensuality_scores"].iloc[0]
@@ -70,13 +81,19 @@ def preprocessed_scores(
         topic_rows = topic_df[topic_df["id"] == review_id]
         topic_dict = dict(zip(topic_rows["sentence"], topic_rows["topic"]))
 
-        # Get rebuttal if available
+        # Get rebuttal if available - match by review number within submission
         rebuttal = ""
         if rebuttals_df is not None and review_id in rebuttals_df["id"].values:
-            rebuttal_row = rebuttals_df[rebuttals_df["id"] == review_id]
-            if not rebuttal_row.empty and "rebuttal" in rebuttal_row.columns:
-                rebuttal_val = rebuttal_row["rebuttal"].iloc[0]
-                rebuttal = str(rebuttal_val) if pd.notna(rebuttal_val) else ""
+            submission_reviews = rebuttals_df[rebuttals_df["id"] == review_id]
+            if not submission_reviews.empty and "rebuttal" in submission_reviews.columns:
+                if review_num < len(submission_reviews):
+                    rebuttal_val = submission_reviews["rebuttal"].iloc[review_num]
+                    rebuttal = str(rebuttal_val) if pd.notna(rebuttal_val) else ""
+                    # Debug output
+                    if review_id == "https://openreview.net/forum?id=ryxz8CVYDH":
+                        print(f"DEBUG: {review_id[:50]}... review #{review_num+1}/{len(submission_reviews)}")
+                        print(f"       rebuttal_val type: {type(rebuttal_val)}, notna: {pd.notna(rebuttal_val)}")
+                        print(f"       rebuttal length: {len(rebuttal)}")
 
         scored_sentences = {}
         for sentence in glimpse_tokenizer(review_text):
@@ -189,6 +206,7 @@ def build_dataset(
             polarity_csv_path = polarity_dir / f"polarity_scored_reviews_{year}.csv"
             topic_csv_path = topic_dir / f"topic_scored_reviews_{year}.csv"
             scored_csv_path = scored_csv_dir / f"GLIMPSE_results_{year}.csv"
+            raw_data_csv_path = BASE_DIR / "data" / f"all_reviews_{year}.csv"
 
             # Use existing preprocessed_scores function
             scored_reviews = preprocessed_scores(
@@ -196,6 +214,7 @@ def build_dataset(
                 scored_csv_path,
                 polarity_csv_path,
                 topic_csv_path,
+                raw_data_csv_path,
             )
 
             # Load original data to extract rebuttals
