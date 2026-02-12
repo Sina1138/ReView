@@ -2,6 +2,11 @@
 logs_and_guides/
 !README.md
 *.md
+logs/
+
+# validation and training files -- to be added back after
+validation/
+training/
 
 # ========================================================================
 
