@@ -64,14 +64,32 @@ class InteractiveReviewProcessor:
         self.rsa_model.eval()
 
         # Load polarity model
-        polarity_model_name = "Sina1138/Scibert_polarity_Review"
+        # Option A (Feb 2026): DeBERTa-v3-base for +5.5% F1 improvement (0.764 vs 0.724 SciBERT)
+        # Try local trained model first, fall back to HuggingFace
+        polarity_model_local = BASE_DIR / "training" / "outputs" / "deberta_polarity" / "final_model"
+        if polarity_model_local.exists() and (polarity_model_local / "config.json").exists():
+            polarity_model_name = str(polarity_model_local)
+            print(f"Loading polarity model from local trained model: {polarity_model_name}")
+        else:
+            # Fallback: will need to upload fine-tuned model or use legacy SciBERT
+            polarity_model_name = "Sina1138/Scibert_polarity_Review"  # Legacy SciBERT
+            print(f"Local model not found, using legacy SciBERT: {polarity_model_name}")
+
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
         self.polarity_model.to(self.device)
         self.polarity_model.eval()
 
         # Load topic model
-        topic_model_name = "Sina1138/SciDeberta_Review"
+        # SciDeBERTa maintains best performance (F1=0.478)
+        topic_model_local = BASE_DIR / "training" / "outputs" / "scideberta_topic" / "final_model"
+        if topic_model_local.exists() and (topic_model_local / "config.json").exists():
+            topic_model_name = str(topic_model_local)
+            print(f"Loading topic model from local trained model: {topic_model_name}")
+        else:
+            topic_model_name = "Sina1138/SciDeberta_Review"  # Production HuggingFace model
+            print(f"Using HuggingFace topic model: {topic_model_name}")
+
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
         self.topic_model.to(self.device)

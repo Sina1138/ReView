@@ -184,31 +184,44 @@ def validate_input_file(input_path: Path, required_columns: list) -> pd.DataFram
 def load_polarity_model(model_variant: str, base_dir: Path, device: str = "cuda"):
     """
     Factory function to load polarity model by variant name.
-    
+
     Supported variants:
-      - "scibert": scibert/scibert_polarity/final_model
-      - "deberta": alternative_polarity/deberta/final_model
-      - "scideberta": alternative_polarity/scideberta/final_model
-    
+      - "scibert": scibert/scibert_polarity/final_model (F1=0.724 baseline)
+      - "deberta": training/outputs/deberta_polarity/final_model (F1=0.764, +5.5% - RECOMMENDED)
+      - "deberta_v3_small": training/outputs/deberta_v3_small_polarity/final_model (F1=0.754)
+      - "modernbert": training/outputs/modernbert_polarity/final_model (F1=0.741)
+      - "scideberta": training/outputs/scideberta_polarity/final_model (F1=0.737)
+
     Args:
         model_variant: Name of model variant
         base_dir: Base directory of project
         device: Device to load onto
-        
+
     Returns:
         Tuple of (tokenizer, model, device_obj)
-        
+
     Raises:
         ValueError: If model_variant not supported
         FileNotFoundError: If model directory doesn't exist
     """
+    # Feb 2026: New trained models from training/outputs/ (standardized comparison)
     variant_map = {
-        "scibert": base_dir / "scibert" / "scibert_polarity" / "final_model",
-        "deberta": base_dir / "alternative_polarity" / "deberta" / "deberta_v3_base_polarity_final_model",
-        "scideberta": base_dir / "alternative_polarity" / "scideberta" / "scideberta_full_polarity_final_model",
+        "scibert": base_dir / "training" / "outputs" / "scibert_polarity" / "final_model",
+        "deberta": base_dir / "training" / "outputs" / "deberta_polarity" / "final_model",  # BEST: F1=0.764
+        "deberta_v3_small": base_dir / "training" / "outputs" / "deberta_v3_small_polarity" / "final_model",
+        "modernbert": base_dir / "training" / "outputs" / "modernbert_polarity" / "final_model",
+        "scideberta": base_dir / "training" / "outputs" / "scideberta_polarity" / "final_model",
+        # Legacy models (pre-Feb 2026, kept for backwards compatibility)
+        "scibert_legacy": base_dir / "scibert" / "scibert_polarity" / "final_model",
+        "deberta_legacy": base_dir / "alternative_polarity" / "deberta" / "deberta_v3_base_polarity_final_model",
+        "scideberta_legacy": base_dir / "alternative_polarity" / "scideberta" / "scideberta_full_polarity_final_model",
     }
     hub_fallback_map = {
         "scibert": "Sina1138/Scibert_polarity_Review",
+        "scideberta": "KISTI-AI/Scideberta-full",  # Needs fine-tuning
+        "modernbert": "answerdotai/ModernBERT-base",  # Needs fine-tuning
+        "deberta": "microsoft/deberta-v3-base",  # Needs fine-tuning
+        "deberta_v3_small": "microsoft/deberta-v3-small",  # Needs fine-tuning
     }
 
     if model_variant not in variant_map:
@@ -224,31 +237,44 @@ def load_polarity_model(model_variant: str, base_dir: Path, device: str = "cuda"
 def load_topic_model(model_variant: str, base_dir: Path, device: str = "cuda"):
     """
     Factory function to load topic model by variant name.
-    
+
     Supported variants:
-      - "scibert": scibert/scibert_topic/final_model
-      - "deberta": alternative_topic/deberta/final_model
-      - "scideberta": alternative_topic/scideberta/final_model
-    
+      - "scideberta": training/outputs/scideberta_topic/final_model (F1=0.478 - BEST, RECOMMENDED)
+      - "deberta": training/outputs/deberta_topic/final_model (F1=0.450)
+      - "scibert": training/outputs/scibert_topic/final_model (F1=0.442)
+      - "deberta_v3_small": training/outputs/deberta_v3_small_topic/final_model (F1=0.381)
+      - "modernbert": training/outputs/modernbert_topic/final_model (F1=0.376)
+
     Args:
         model_variant: Name of model variant
         base_dir: Base directory of project
         device: Device to load onto
-        
+
     Returns:
         Tuple of (tokenizer, model, device_obj)
-        
+
     Raises:
         ValueError: If model_variant not supported
         FileNotFoundError: If model directory doesn't exist
     """
+    # Feb 2026: New trained models from training/outputs/ (standardized comparison)
     variant_map = {
-        "scibert": base_dir / "scibert" / "scibert_topic" / "final_model",
-        "deberta": base_dir / "alternative_topic" / "deberta" / "final_model",
-        "scideberta": base_dir / "alternative_topic" / "scideberta" / "final_model",
+        "scideberta": base_dir / "training" / "outputs" / "scideberta_topic" / "final_model",  # BEST: F1=0.478
+        "deberta": base_dir / "training" / "outputs" / "deberta_topic" / "final_model",
+        "scibert": base_dir / "training" / "outputs" / "scibert_topic" / "final_model",
+        "deberta_v3_small": base_dir / "training" / "outputs" / "deberta_v3_small_topic" / "final_model",
+        "modernbert": base_dir / "training" / "outputs" / "modernbert_topic" / "final_model",
+        # Legacy models (pre-Feb 2026, kept for backwards compatibility)
+        "scibert_legacy": base_dir / "scibert" / "scibert_topic" / "final_model",
+        "deberta_legacy": base_dir / "alternative_topic" / "deberta" / "final_model",
+        "scideberta_legacy": base_dir / "alternative_topic" / "scideberta" / "final_model",
     }
     hub_fallback_map = {
-        "scibert": "Sina1138/SciDeberta_Review",
+        "scideberta": "Sina1138/SciDeberta_Review",  # Production HuggingFace model
+        "scibert": "allenai/scibert_scivocab_uncased",  # Needs fine-tuning
+        "deberta": "microsoft/deberta-v3-base",  # Needs fine-tuning
+        "deberta_v3_small": "microsoft/deberta-v3-small",  # Needs fine-tuning
+        "modernbert": "answerdotai/ModernBERT-base",  # Needs fine-tuning
     }
 
     if model_variant not in variant_map:

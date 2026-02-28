@@ -28,9 +28,26 @@ class Config:
     OPENREVIEW_BASE_URL = 'https://api2.openreview.net'
     VENUE_TEMPLATE = 'ICLR.cc/{year}/Conference'
 
-    # Model paths (HuggingFace)
-    POLARITY_MODEL = "Sina1138/Scibert_polarity_Review"
-    TOPIC_MODEL = "Sina1138/SciDeberta_Review"
+    # Model paths
+    # Option A (Maximize Accuracy): DeBERTa polarity + SciDeBERTa topic - Feb 2026 upgrade
+    # Polarity: DeBERTa-v3-base (F1=0.764, +5.5% vs SciBERT baseline 0.724)
+    # Topic: SciDeBERTa (F1=0.478, maintains lead)
+
+    # Local trained models (preferred for production after validation)
+    POLARITY_MODEL_LOCAL = BASE_DIR / "training" / "outputs" / "deberta_polarity" / "final_model"
+    TOPIC_MODEL_LOCAL = BASE_DIR / "training" / "outputs" / "scideberta_topic" / "final_model"
+
+    # HuggingFace fallbacks (if local models not available)
+    POLARITY_MODEL_HUB = "Sina1138/Scibert_polarity_Review"  # Legacy SciBERT (until fine-tuned DeBERTa is uploaded to Hub)
+    TOPIC_MODEL_HUB = "Sina1138/SciDeberta_Review"  # Current production model
+
+    # Legacy models (SciBERT baseline, kept for reference)
+    POLARITY_MODEL_LEGACY = "Sina1138/Scibert_polarity_Review"  # F1=0.724
+
+    # Use local models if available, otherwise fall back to hub
+    POLARITY_MODEL = str(POLARITY_MODEL_LOCAL) if POLARITY_MODEL_LOCAL.exists() else POLARITY_MODEL_HUB
+    TOPIC_MODEL = str(TOPIC_MODEL_LOCAL) if TOPIC_MODEL_LOCAL.exists() else TOPIC_MODEL_HUB
+
     RSA_MODEL = "sshleifer/distilbart-cnn-12-3"  # For GLIMPSE
 
     @classmethod

@@ -6,10 +6,14 @@ from pathlib import Path
 from tqdm import tqdm
 import json
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR))
+_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(_dir))
+sys.path.insert(0, str(_dir.parent))
 
+from config import Config
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
+
+BASE_DIR = Config.BASE_DIR
 
 # def tokenize_sentences(text: str) -> list:
 #     # same tokenization as in the original glimpse code
