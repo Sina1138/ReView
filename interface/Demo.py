@@ -55,6 +55,21 @@ if df_new.empty:
 
 # Use new data only
 years, all_scored_reviews_df = years_new, df_new
+
+# Build a {forum_url: paper_title} lookup from raw data CSVs (processed CSVs lack paper_title)
+def _load_paper_titles() -> dict:
+    titles = {}
+    for csv in sorted((BASE_DIR / "data").glob("all_reviews_*.csv")):
+        try:
+            df = pd.read_csv(csv, usecols=["id", "paper_title"])
+            for _, row in df.iterrows():
+                if row["id"] not in titles and pd.notna(row.get("paper_title", "")):
+                    titles[row["id"]] = str(row["paper_title"])
+        except Exception:
+            pass
+    return titles
+
+_paper_titles = _load_paper_titles()
 year_range_str = f"{min(years)}–{max(years)}" if years else "N/A"
 
 # -----------------------------------
@@ -536,10 +551,24 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 color_map = {}  # Default to empty map
                 legend = False
 
-            new_review_id = (
-                f"### Submission Link:\n\n{review_ids[current_index]}<br>"
-                f"(Showing {current_index + 1} of {len(state['review_ids'])} reviews)"
-            )
+            current_id = review_ids[current_index]
+            # Primary source: raw CSV lookup (processed CSVs lack paper_title)
+            paper_title = _paper_titles.get(current_id, "")
+            # Fallback: metadata column in preprocessed CSV
+            if not paper_title:
+                paper_meta = state.get("metadata_for_year", {}).get(current_id, {})
+                paper_title = paper_meta.get("paper_title", "") if isinstance(paper_meta, dict) else ""
+            if paper_title:
+                new_review_id = (
+                    f"### {paper_title}\n\n"
+                    f"[View on OpenReview]({current_id}) &nbsp;·&nbsp; "
+                    f"({current_index + 1} of {len(state['review_ids'])} submissions)"
+                )
+            else:
+                new_review_id = (
+                    f"### [View on OpenReview]({current_id})\n\n"
+                    f"({current_index + 1} of {len(state['review_ids'])} submissions)"
+                )
 
             number_of_displayed_reviews = len(current_review)
             review_updates = []
@@ -573,12 +602,12 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                         highlighted = []
                         for sentence, metadata in review_item:
                             polarity = metadata.get("polarity", None)
-                            if polarity >= 0.995:
+                            if polarity == 2:
                                 label = "➕"  # positive
-                            elif polarity <= -0.99:
+                            elif polarity == 0:
                                 label = "➖"  # negative
                             else:
-                                label = None  # ignore neutral (1)
+                                label = None  # neutral (1)
                             highlighted.append((sentence, label))
                     elif show_consensuality:
                         highlighted = []

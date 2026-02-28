@@ -224,6 +224,19 @@ def build_dataset(
             # Load original data to extract rebuttals
             original_df = pd.read_csv(original_csv_path)
 
+            # Load paper titles from raw data CSV (processed CSVs lack paper_title)
+            paper_titles = {}
+            if raw_data_csv_path.exists():
+                try:
+                    raw_df = pd.read_csv(raw_data_csv_path, usecols=["id", "paper_title"])
+                    paper_titles = {
+                        row["id"]: str(row["paper_title"])
+                        for _, row in raw_df.iterrows()
+                        if pd.notna(row.get("paper_title", ""))
+                    }
+                except Exception as e:
+                    print(f"Warning: Could not load paper titles from {raw_data_csv_path}: {e}")
+
             # Build metadata dict with rebuttals
             review_metadata = {}
             for _, row in original_df.iterrows():
@@ -236,7 +249,7 @@ def build_dataset(
 
                 review_metadata[review_id] = {
                     'rebuttal': rebuttal_str,
-                    'paper_title': row.get('paper_title', '') if 'paper_title' in original_df.columns else '',
+                    'paper_title': paper_titles.get(review_id, ''),
                     'has_rebuttal': bool(rebuttal_str.strip()) if rebuttal_str else False,
                 }
 
