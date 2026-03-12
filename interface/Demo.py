@@ -16,8 +16,75 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Lower = more vivid colors (0.2 = very strong, 1.0 = no amplification).
 # Asymmetric: unique/red (positive) is amplified less than common/blue (negative)
 # to avoid overwhelming red when most sentences are unique.
-AGREEMENT_AMP_UNIQUE = 0.9   # exponent for positive scores (red = unique)
-AGREEMENT_AMP_COMMON = 0.5   # exponent for negative scores (blue = common)
+AGREEMENT_AMP_UNIQUE = 0.95  # exponent for positive scores (red = unique)
+AGREEMENT_AMP_COMMON = 0.65  # exponent for negative scores (blue = common)
+
+import html as _html
+
+def format_summary_cards(
+    sentences: list,
+    scores: dict,
+    sentence_lists: list,
+    card_type: str = "common",
+) -> str:
+    """
+    Generate styled HTML cards for the Most Common / Most Divergent summary boxes.
+
+    Args:
+        sentences: Top N sentence strings to display.
+        scores: Full {sentence: score} dict for badge coloring.
+        sentence_lists: Per-review sentence lists (for attribution & context).
+        card_type: "common" (blue) or "unique" (red).
+    """
+    if not sentences:
+        return ""
+
+    border_color = "#93c5fd" if card_type == "common" else "#fca5a5"
+    badge_bg = "#dbeafe" if card_type == "common" else "#fee2e2"
+    badge_fg = "#1e40af" if card_type == "common" else "#991b1b"
+    title = "Most Common Opinions" if card_type == "common" else "Most Divergent Opinions"
+
+    cards_html = (
+        f'<div style="margin-bottom:4px;font-weight:600;font-size:0.9em;color:#374151;">{title}</div>'
+    )
+
+    for sent in sentences:
+        # Find which reviews contain this sentence
+        review_badges = []
+        context_before, context_after = "", ""
+        for r_idx, sl in enumerate(sentence_lists):
+            if sent in sl:
+                review_badges.append(r_idx + 1)
+                # Get 1 sentence before and after for context (from first matching review)
+                if not context_before and not context_after:
+                    s_idx = sl.index(sent)
+                    if s_idx > 0:
+                        context_before = _html.escape(sl[s_idx - 1])
+                    if s_idx < len(sl) - 1:
+                        context_after = _html.escape(sl[s_idx + 1])
+
+        badges = " ".join(
+            f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 8px;'
+            f'border-radius:4px;font-size:0.72em;font-weight:600;">Review {n}</span>'
+            for n in review_badges
+        )
+
+        ctx_style = 'color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;'
+        before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
+        after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
+
+        cards_html += (
+            f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
+            f'border-radius:6px;padding:10px 14px;margin-bottom:6px;">'
+            f'<div style="display:flex;gap:6px;margin-bottom:6px;">{badges}</div>'
+            f'{before_html}'
+            f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
+            f'{after_html}'
+            f'</div>'
+        )
+
+    return cards_html
+
 
 # Auto-detect the preprocessed dataset CSV
 def _find_preprocessed_csv() -> Path:
@@ -190,7 +257,11 @@ def _status_html(msg, kind="success"):
 
 # ===== INTERACTIVE TAB: GLOBAL PROCESSOR INITIALIZATION =====
 # Initialize once at module load to avoid reloading models
-from interface.interactive_processor import InteractiveReviewProcessor, is_section_header
+from interface.interactive_processor import InteractiveReviewProcessor
+from dependencies.sentence_filter import (
+    is_noise_sentence, filter_and_clean_sentences, strip_header_prefix,
+    HIGHLIGHT_THRESHOLD,
+)
 _interactive_processor = None
 
 def get_interactive_processor():
@@ -381,7 +452,9 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     if len(sentence_lists) < 2:
         raise ValueError("At least two reviews must have valid sentences")
 
-    all_sentences = [s for s in set(s for sl in sentence_lists for s in sl) if not is_section_header(s)]
+    all_sentences = filter_and_clean_sentences(
+        list(set(s for sl in sentence_lists for s in sl))
+    )
 
     # Step 3-4: Polarity + Topic (parallelize both models)
     progress(0.30, desc="Predicting polarity and topics (parallel)...")
@@ -455,12 +528,14 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
         progress(0.50, desc="Running RSA reranking...")
         consensuality_map = processor.predict_consensuality(*active_texts)
 
-        # Calculate most common and unique (before amplification, so ranking is on true scores)
+        # Build summary cards with review attribution and context
         if consensuality_map:
             import pandas as _pd
             scores_series = _pd.Series(consensuality_map)
-            most_common_text = "\n".join(scores_series.nsmallest(3).index.tolist())
-            most_unique_text = "\n".join(scores_series.nlargest(3).index.tolist())
+            top_common = scores_series.nsmallest(3).index.tolist()
+            top_unique = scores_series.nlargest(3).index.tolist()
+            most_common_text = format_summary_cards(top_common, consensuality_map, sentence_lists, "common")
+            most_unique_text = format_summary_cards(top_unique, consensuality_map, sentence_lists, "unique")
         else:
             most_common_text = ""
             most_unique_text = ""
@@ -643,6 +718,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                             highlighted.append((sentence, label))
                     elif show_consensuality:
                         highlighted = []
+                        import math
                         for sentence, metadata in review_item:
                             raw = metadata.get("consensuality", 0.0)
                             # Robust normalization: median-centered, IQR-scaled, clipped to [-1, 1]
@@ -650,11 +726,14 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                                 score = max(-1.0, min(1.0, (raw - _kl_median) / (_kl_iqr * 2)))
                             else:
                                 score = 0.0
-                            consensuality_dict[sentence] = score
-                            # Asymmetric amplification for display
-                            import math
-                            display_score = math.copysign(abs(score) ** (AGREEMENT_AMP_UNIQUE if score > 0 else AGREEMENT_AMP_COMMON), score) if score != 0 else 0.0
-                            highlighted.append((sentence, display_score))
+                            # Display-time filtering: noise sentences and near-zero scores get no color
+                            if is_noise_sentence(sentence) or abs(score) < HIGHLIGHT_THRESHOLD:
+                                highlighted.append((sentence, None))
+                            else:
+                                consensuality_dict[sentence] = score
+                                # Asymmetric amplification for display
+                                display_score = math.copysign(abs(score) ** (AGREEMENT_AMP_UNIQUE if score > 0 else AGREEMENT_AMP_COMMON), score)
+                                highlighted.append((sentence, display_score))
                         
                     elif show_topic:
                         highlighted = []
@@ -695,22 +774,30 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             # General rebuttal display (currently unused in new format, kept for backward compat)
             general_rebuttal_update = gr.update(visible=False, value="")
 
-            # Set most consensual / unique sentences
+            # Set most consensual / unique sentences (as HTML cards with context)
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
                 most_unique = scores.sort_values(ascending=False).head(3).index.tolist()
                 most_common = scores.sort_values(ascending=True).head(3).index.tolist()
-                most_common_text = "\n".join(most_common)
-                most_unique_text = "\n".join(most_unique)
 
-                most_common_visibility = gr.update(visible=True, value=most_common_text)
-                most_unique_visibility = gr.update(visible=True, value=most_unique_text)
+                # Build per-review sentence lists for attribution
+                review_sentence_lists = []
+                for review_data in current_review:
+                    if isinstance(review_data, dict) and "sentences" in review_data:
+                        review_sentence_lists.append(list(review_data["sentences"].keys()))
+                    elif isinstance(review_data, dict):
+                        review_sentence_lists.append(list(review_data.keys()))
+                    else:
+                        review_sentence_lists.append([])
+
+                most_common_html = format_summary_cards(most_common, consensuality_dict, review_sentence_lists, "common")
+                most_unique_html = format_summary_cards(most_unique, consensuality_dict, review_sentence_lists, "unique")
+
+                most_common_visibility = gr.update(visible=True, value=most_common_html)
+                most_unique_visibility = gr.update(visible=True, value=most_unique_html)
             else:
-                # Debugging statements to check visibility settings
-                # print("Hiding most common and unique sentences")
-
-                most_common_visibility = gr.update(visible=False, value=[])
-                most_unique_visibility = gr.update(visible=False, value=[])
+                most_common_visibility = gr.update(visible=False, value="")
+                most_unique_visibility = gr.update(visible=False, value="")
                 
             # update topic color map
             if show_topic:
@@ -768,18 +855,16 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
 
         # Output display.
         with gr.Row():
-            most_common_sentences = gr.Textbox(
-            lines=8,
-            label="Most Common Opinions",
-            visible=False,
-            value=[]
-        )
-            most_unique_sentences = gr.Textbox(
-            lines=8,
-            label="Most Divergent Opinions",
-            visible=False,
-            value=[]
-        )
+            most_common_sentences = gr.HTML(
+                visible=False,
+                value="",
+                label="Most Common Opinions",
+            )
+            most_unique_sentences = gr.HTML(
+                visible=False,
+                value="",
+                label="Most Divergent Opinions",
+            )
         
         # Add a new textbox for topic labels and colors
         topic_text_box = gr.HighlightedText(
@@ -901,11 +986,11 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 )
 
             with gr.Row():
-                most_divergent = gr.Textbox(
-                    lines=4, label="Most Divergent Opinions", visible=False, value="", container=True
+                most_divergent = gr.HTML(
+                    visible=False, value="", label="Most Divergent Opinions",
                 )
-                most_common = gr.Textbox(
-                    lines=4, label="Most Common Opinions", visible=False, value="", container=True
+                most_common = gr.HTML(
+                    visible=False, value="", label="Most Common Opinions",
                 )
 
             # Review 1 (all display modes + rebuttal)

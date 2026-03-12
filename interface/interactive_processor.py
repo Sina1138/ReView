@@ -20,21 +20,10 @@ sys.path.insert(0, str(BASE_DIR))
 
 from dependencies.rsa_reranker import RSAReranking
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
-
-
-_HEADER_RE = re.compile(
-    r'^(\*{1,2}|#{1,3}\s*)?(summary|strengths?|weaknesses?|questions?|limitations?|minor|'
-    r'rating|confidence|correctness|clarity|originality|significance|'
-    r'pros?|cons?|comments?|suggestions?|conclusion|recommendation|'
-    r'contribution|technical\s+quality|presentation|reproducibility|'
-    r'novelty|experiments?|related\s+work|other|additional)\s*:?(\*{1,2})?$',
-    re.IGNORECASE
+from dependencies.sentence_filter import (
+    is_section_header, is_noise_sentence, filter_and_clean_sentences,
+    strip_header_prefix, HIGHLIGHT_THRESHOLD,
 )
-
-
-def is_section_header(sentence: str) -> bool:
-    """Return True if sentence is a structural section header (should be excluded from scoring)."""
-    return bool(_HEADER_RE.match(sentence.strip()))
 
 # Try to import OpenReview, but don't fail if not available
 try:
@@ -170,8 +159,9 @@ class InteractiveReviewProcessor:
         # Tokenize all reviews
         all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
 
-        # Get unique sentences, excluding section headers
-        sentences = [s for s in set(s for lst in all_sentence_lists for s in lst) if not is_section_header(s)]
+        # Get unique sentences, filtering out noise (headers, citations, short fragments, etc.)
+        unique_sentences = list(set(s for lst in all_sentence_lists for s in lst))
+        sentences = filter_and_clean_sentences(unique_sentences)
 
         if not sentences:
             return {}
@@ -227,7 +217,10 @@ class InteractiveReviewProcessor:
             return [(s, None) for s in sentences]
         elif score_type == "consensuality":
             return [
-                (s, scores_dict.get(s, 0.0) if isinstance(scores_dict.get(s), (int, float)) else None)
+                (s, scores_dict.get(s, 0.0)
+                 if isinstance(scores_dict.get(s), (int, float))
+                    and abs(scores_dict.get(s, 0.0)) >= HIGHLIGHT_THRESHOLD
+                 else None)
                 for s in sentences
             ]
         else:  # polarity or topic
@@ -259,8 +252,10 @@ class InteractiveReviewProcessor:
         if any(len(sl) == 0 for sl in sentence_lists):
             raise ValueError("One or more reviews have no valid sentences")
 
-        # Get unique sentences for scoring, excluding section headers
-        all_sentences = [s for s in set(s for sl in sentence_lists for s in sl) if not is_section_header(s)]
+        # Get unique sentences, filtering out noise (headers, citations, short fragments, etc.)
+        all_sentences = filter_and_clean_sentences(
+            list(set(s for sl in sentence_lists for s in sl))
+        )
 
         # Predict scores (skip consensuality - that comes async)
         polarity_map = self.predict_polarity(all_sentences)
@@ -305,8 +300,10 @@ class InteractiveReviewProcessor:
         if any(len(sl) == 0 for sl in sentence_lists):
             raise ValueError("One or more reviews have no valid sentences")
 
-        # Get unique sentences for scoring, excluding section headers
-        all_sentences = [s for s in set(s for sl in sentence_lists for s in sl) if not is_section_header(s)]
+        # Get unique sentences, filtering out noise (headers, citations, short fragments, etc.)
+        all_sentences = filter_and_clean_sentences(
+            list(set(s for sl in sentence_lists for s in sl))
+        )
 
         # Predict scores
         polarity_map = self.predict_polarity(all_sentences)
