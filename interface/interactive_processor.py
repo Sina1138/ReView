@@ -188,12 +188,20 @@ class InteractiveReviewProcessor:
 
         _, _, _, _, _, _, _, consensuality_scores = rsa_reranker.rerank(t=iterations)
 
-        # Normalize to [-1, 1]
+        # Robust normalization: median-centered, IQR-scaled, clipped to [-1, 1]
+        # This avoids outliers dominating the color scale
+        import numpy as np
         scores = consensuality_scores.copy()
-        scores_min = scores.min()
-        scores_max = scores.max()
-        scores = (scores - scores_min) / (scores_max - scores_min) if scores_max > scores_min else scores
-        scores = scores * 2 - 1  # Scale to [-1, 1]
+        vals = scores.values
+        median = np.median(vals)
+        q25, q75 = np.percentile(vals, 25), np.percentile(vals, 75)
+        iqr = q75 - q25
+        if iqr > 0:
+            # Center on median, scale so IQR spans ~[-0.5, 0.5], clip to [-1, 1]
+            scores = ((scores - median) / (iqr * 2)).clip(-1, 1)
+        else:
+            # All scores identical or near-identical
+            scores = scores * 0
 
         return dict(scores)
 

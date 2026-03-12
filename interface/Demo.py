@@ -2,16 +2,22 @@ import sys, os.path
 from pathlib import Path
 from typing import Tuple, Dict
 import json
-
 import torch
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-
 import gradio as gr
 import pandas as pd
 import ast
 from tqdm import tqdm
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Controls how aggressively agreement colors are amplified.
+# Lower = more vivid colors (0.2 = very strong, 1.0 = no amplification).
+# Asymmetric: unique/red (positive) is amplified less than common/blue (negative)
+# to avoid overwhelming red when most sentences are unique.
+AGREEMENT_AMP_UNIQUE = 0.9   # exponent for positive scores (red = unique)
+AGREEMENT_AMP_COMMON = 0.5   # exponent for negative scores (blue = common)
 
 # Auto-detect the preprocessed dataset CSV
 def _find_preprocessed_csv() -> Path:
@@ -449,15 +455,23 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
         progress(0.50, desc="Running RSA reranking...")
         consensuality_map = processor.predict_consensuality(*active_texts)
 
-        # Calculate most common and unique
+        # Calculate most common and unique (before amplification, so ranking is on true scores)
         if consensuality_map:
             import pandas as _pd
             scores_series = _pd.Series(consensuality_map)
-            most_common_text = "\n".join(scores_series.nlargest(3).index.tolist())
-            most_unique_text = "\n".join(scores_series.nsmallest(3).index.tolist())
+            most_common_text = "\n".join(scores_series.nsmallest(3).index.tolist())
+            most_unique_text = "\n".join(scores_series.nlargest(3).index.tolist())
         else:
             most_common_text = ""
             most_unique_text = ""
+
+        # Amplify scores for visible highlighting: sign-preserving power transform
+        # Maps [-1,1] → [-1,1] but pushes values away from 0 for better color contrast
+        import math
+        amplified_map = {
+            s: math.copysign(abs(v) ** (AGREEMENT_AMP_UNIQUE if v > 0 else AGREEMENT_AMP_COMMON), v) if v != 0 else 0.0
+            for s, v in consensuality_map.items()
+        }
 
         progress(0.90, desc="Formatting agreement results...")
 
@@ -466,7 +480,7 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
         agree_out = []
         for i in range(MAX_INTERACTIVE_REVIEWS):
             if i < len(sentence_lists):
-                agree_out.append(gr.update(visible=show_agreement, value=fmt(sentence_lists[i], consensuality_map, "consensuality")))
+                agree_out.append(gr.update(visible=show_agreement, value=fmt(sentence_lists[i], amplified_map, "consensuality")))
             else:
                 agree_out.append(gr.update(visible=False, value=None))
 
@@ -575,6 +589,24 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             rebuttal_updates = []
             consensuality_dict = {}
 
+            # Pre-compute robust normalization stats (median + IQR) for raw KL scores
+            import numpy as _np
+            _kl_median, _kl_iqr = 0.0, 0.0
+            if show_consensuality:
+                all_raw_scores = []
+                for review_data in current_review:
+                    if isinstance(review_data, dict) and "sentences" in review_data:
+                        items = review_data["sentences"].items()
+                    else:
+                        items = review_data.items() if isinstance(review_data, dict) else []
+                    for _, metadata in items:
+                        all_raw_scores.append(metadata.get("consensuality", 0.0))
+                if all_raw_scores:
+                    arr = _np.array(all_raw_scores)
+                    _kl_median = float(_np.median(arr))
+                    q25, q75 = float(_np.percentile(arr, 25)), float(_np.percentile(arr, 75))
+                    _kl_iqr = q75 - q25
+
             for i in range(10):
                 if i < number_of_displayed_reviews:
                     # Handle new structure: current_review[i] can be dict with "sentences" and "rebuttal"
@@ -612,13 +644,17 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                     elif show_consensuality:
                         highlighted = []
                         for sentence, metadata in review_item:
-                            score = metadata.get("consensuality", 0.0)
-                            score = score * 2 - 1  # Normalize to [-1, 1]
-                            score = score/2.5 if score > 0 else score  # Amplify unique scores for better visibility
-                            score *= -1  # Invert the score for highlighting
-                            
+                            raw = metadata.get("consensuality", 0.0)
+                            # Robust normalization: median-centered, IQR-scaled, clipped to [-1, 1]
+                            if _kl_iqr > 0:
+                                score = max(-1.0, min(1.0, (raw - _kl_median) / (_kl_iqr * 2)))
+                            else:
+                                score = 0.0
                             consensuality_dict[sentence] = score
-                            highlighted.append((sentence, score))
+                            # Asymmetric amplification for display
+                            import math
+                            display_score = math.copysign(abs(score) ** (AGREEMENT_AMP_UNIQUE if score > 0 else AGREEMENT_AMP_COMMON), score) if score != 0 else 0.0
+                            highlighted.append((sentence, display_score))
                         
                     elif show_topic:
                         highlighted = []
@@ -662,8 +698,8 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             # Set most consensual / unique sentences
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
-                most_unique = scores.sort_values(ascending=True).head(3).index.tolist()
-                most_common = scores.sort_values(ascending=False).head(3).index.tolist()
+                most_unique = scores.sort_values(ascending=False).head(3).index.tolist()
+                most_common = scores.sort_values(ascending=True).head(3).index.tolist()
                 most_common_text = "\n".join(most_common)
                 most_unique_text = "\n".join(most_unique)
 
