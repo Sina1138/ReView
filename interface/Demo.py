@@ -1504,7 +1504,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 gr.update(value="✅ Polarity & Topic ready! Computing agreement in background...", visible=True),
                 gr.update(visible=True),    # back_to_input_btn
                 gr.update(visible=False),   # view_results_btn
-                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"]),
+                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"], value="No Highlighting"),
                 *per_review,  # 6 per-review rebuttal components
                 gr.update(visible=has_general, value=general_formatted),  # general rebuttal display (only if exists)
             )
@@ -1692,5 +1692,12 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             inputs=[interactive_review_count],
             outputs=[interactive_review_count, review4_textbox, review5_textbox, review6_textbox]
         )
-        
+
+    # Populate pre-processed tab with initial data on page load
+    demo.load(
+        fn=lambda s: update_review_display(s, "No Highlighting"),
+        inputs=[state],
+        outputs=_review_outputs,
+    )
+
 demo.launch(share=False)
