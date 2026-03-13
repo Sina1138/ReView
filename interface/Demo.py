@@ -1067,7 +1067,10 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 review_sentence_lists.append([s for s, _ in review_item])
                 review_items_cache.append((review_item, rebuttal_html))
 
-            # For agreement mode, build uniqueness dict upfront for render_agreement_html
+            # For agreement mode, build uniqueness dict and extract RSA distributions
+            # RSA listener/speaker come from metadata (if pipeline saved them)
+            prep_listener = None
+            prep_speaker = None
             if show_consensuality:
                 for idx in range(number_of_displayed_reviews):
                     review_item, _ = review_items_cache[idx]
@@ -1080,7 +1083,23 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                         if not is_noise_sentence(sentence) and abs(score) >= HIGHLIGHT_THRESHOLD:
                             consensuality_dict[sentence] = score
 
+                # Extract listener/speaker from metadata (saved by pipeline)
+                meta_for_year = state.get("metadata_for_year", {})
+                submission_meta = meta_for_year.get(current_id, {})
+                if isinstance(submission_meta, dict):
+                    rsa_data = submission_meta.get("rsa", {})
+                    if rsa_data:
+                        prep_listener = rsa_data.get("listener")
+                        prep_speaker = rsa_data.get("speaker")
+
             agreement_updates = []
+            divergent_per_review = {}
+            # Pre-compute per-review divergent cards if we have RSA data
+            if show_consensuality and prep_listener and prep_speaker and consensuality_dict:
+                divergent_per_review = format_divergent_cards(
+                    consensuality_dict, review_sentence_lists, prep_listener, prep_speaker,
+                )
+
             for i in range(10):
                 if i < number_of_displayed_reviews:
                     review_item, rebuttal_html = review_items_cache[i]
@@ -1128,10 +1147,13 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                         sentences_for_review = [s for s, _ in review_item]
                         agreement_html = render_agreement_html(
                             sentences_for_review, consensuality_dict,
-                            listener={}, speaker={},
+                            listener=prep_listener, speaker=prep_speaker,
                             num_reviews=number_of_displayed_reviews,
                             label=f"Agreement in Review {i + 1}",
                         )
+                        # Append per-review divergent cards (if RSA data available)
+                        if i in divergent_per_review:
+                            agreement_html += divergent_per_review[i]
                         agreement_updates.append(gr.update(visible=True, value=agreement_html))
                     else:
                         agreement_updates.append(gr.update(visible=False, value=""))
@@ -1154,13 +1176,31 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             general_rebuttal_update = gr.update(visible=False, value="")
 
             # Set most common opinions (as HTML cards with context)
-            # Most Unique/Divergent is hidden at top level — consistent with
-            # the interactive tab which embeds divergent cards per-review.
+            # Uses entropy-based ranking when listener data is available (like interactive tab)
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
-                most_common = scores.sort_values(ascending=True).head(5).index.tolist()
 
-                most_common_html = format_summary_cards(most_common, consensuality_dict, review_sentence_lists, "common")
+                if prep_listener:
+                    # Entropy-based ranking: same logic as interactive tab
+                    n_seed = min(15, len(scores))
+                    seed = scores.nsmallest(n_seed).index.tolist()
+
+                    def _listener_entropy(sent):
+                        dist = prep_listener.get(sent, {})
+                        ent = 0.0
+                        for p in dist.values():
+                            if p > 0:
+                                ent -= p * math.log(p)
+                        return ent
+                    seed.sort(key=_listener_entropy, reverse=True)
+                    most_common = seed[:5]
+                else:
+                    most_common = scores.sort_values(ascending=True).head(5).index.tolist()
+
+                most_common_html = format_summary_cards(
+                    most_common, consensuality_dict, review_sentence_lists, "common",
+                    listener=prep_listener, speaker=prep_speaker,
+                )
 
                 most_common_visibility = gr.update(visible=True, value=most_common_html)
                 most_unique_visibility = gr.update(visible=False, value="")

@@ -153,7 +153,8 @@ def convert_pk_to_csv(pickle_path: Path,
     if not isinstance(results, list):
         raise ValueError("Unexpected pickle structure")
 
-    # Extract and flatten results
+    # Extract and flatten results — include listener/speaker distributions
+    # for rich agreement visualization in the UI (R% bars, divergent cards)
     csv_data = []
     for index, result in enumerate(tqdm(results, desc="Converting")):
         row = {
@@ -163,6 +164,22 @@ def convert_pk_to_csv(pickle_path: Path,
             'consensuality_scores': json.dumps(result.get('consensuality_scores').to_dict())
                 if isinstance(result.get('consensuality_scores'), pd.Series) else None,
         }
+
+        # Save listener_df: DataFrame (N_reviews × K_sentences) of log-probs
+        # Stored as JSON: {sentence: {R1: logprob, R2: logprob, ...}}
+        listener_df = result.get('listener_df')
+        if listener_df is not None and isinstance(listener_df, pd.DataFrame):
+            row['listener_df'] = listener_df.to_json()
+        else:
+            row['listener_df'] = None
+
+        # Save speaker_df: DataFrame (N_reviews × K_sentences) of log-probs
+        speaker_df = result.get('speaker_df')
+        if speaker_df is not None and isinstance(speaker_df, pd.DataFrame):
+            row['speaker_df'] = speaker_df.to_json()
+        else:
+            row['speaker_df'] = None
+
         csv_data.append(row)
 
     # Save to expected location
