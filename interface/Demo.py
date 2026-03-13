@@ -40,6 +40,23 @@ def _get_context(sentence: str, sentence_lists: list):
     return "", ""
 
 
+def _rebuttal_toggle_html() -> str:
+    """Generate an Expand/Collapse All Responses toggle button with inline JS."""
+    return (
+        '<div style="display:flex;justify-content:flex-end;margin-bottom:4px;">'
+        '<button onclick="'
+        "let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
+        "let details=tab.querySelectorAll('details');"
+        "let allOpen=Array.from(details).every(d=>d.open);"
+        "details.forEach(d=>d.open=!allOpen);"
+        "this.textContent=allOpen?'Expand All Responses':'Collapse All Responses';"
+        '" style="'
+        'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
+        'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
+        '">Expand All Responses</button></div>'
+    )
+
+
 def format_summary_cards(
     sentences: list,
     scores: dict,
@@ -1226,6 +1243,16 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             else:
                 topic_color_map_visibility = gr.update(visible=False, value=[])
 
+            # Toggle button for expanding/collapsing all author responses
+            has_any_rebuttal = any(
+                r.get("value", "") for r in rebuttal_updates
+                if isinstance(r, dict)
+            )
+            if has_any_rebuttal:
+                rebuttal_toggle_update = gr.update(visible=True, value=_rebuttal_toggle_html())
+            else:
+                rebuttal_toggle_update = gr.update(visible=False, value="")
+
             return (
                 new_review_id,
                 *review_updates,
@@ -1233,6 +1260,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 most_common_visibility,
                 most_unique_visibility,
                 topic_color_map_visibility,
+                rebuttal_toggle_update,  # Toggle button
                 *rebuttal_updates,  # 10 per-review rebuttals
                 general_rebuttal_update,  # General rebuttal section
                 state
@@ -1284,7 +1312,12 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             show_legend=True,
         )
         
-        gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
+        with gr.Row():
+            gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
+            prep_rebuttal_toggle = gr.HTML(
+                visible=False, value="",
+                elem_classes=["rebuttal-toggle-container"],
+            )
         review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
         prep_agreement1 = gr.HTML(visible=False, value="")
         prep_rebuttal1 = gr.HTML(visible=False, value="")
@@ -1340,7 +1373,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
+        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal_toggle, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
         year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
         score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
         next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
@@ -1412,6 +1445,8 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 most_common = gr.HTML(
                     visible=False, value="", label="Most Common Opinions",
                 )
+
+            interactive_rebuttal_toggle = gr.HTML(visible=False, value="")
 
             # Review 1 (all display modes + rebuttal)
             none_text1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=True, value=None)
@@ -1498,6 +1533,14 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             general_formatted = format_general_rebuttals(rebuttal or "")
             has_general = bool(general_formatted)
 
+            # Show toggle if any rebuttals exist
+            has_any = any(bool(format_rebuttal_for_review(rebuttal or "", i)) for i in range(1, 7)) or has_general
+            if has_any:
+                toggle_html = _rebuttal_toggle_html()
+                toggle_update = gr.update(visible=True, value=toggle_html)
+            else:
+                toggle_update = gr.update(visible=False, value="")
+
             return (
                 gr.update(visible=False),   # input_section
                 gr.update(visible=True),    # results_section
@@ -1505,6 +1548,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 gr.update(visible=True),    # back_to_input_btn
                 gr.update(visible=False),   # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"], value="No Highlighting"),
+                toggle_update,  # rebuttal toggle button
                 *per_review,  # 6 per-review rebuttal components
                 gr.update(visible=has_general, value=general_formatted),  # general rebuttal display (only if exists)
             )
@@ -1536,6 +1580,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             fn=_show_results_with_rebuttal,
             inputs=[openreview_rebuttal],
             outputs=[input_section, results_section, status_html, back_to_input_btn, view_results_btn, focus_radio,
+                     interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display]
@@ -1572,6 +1617,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             fn=_show_results_with_rebuttal,
             inputs=[paste_rebuttal],
             outputs=[input_section, results_section, status_html, back_to_input_btn, view_results_btn, focus_radio,
+                     interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display]
@@ -1641,12 +1687,14 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
         ).then(
             fn=lambda: (
                 gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),  # review4-6
+                gr.update(visible=False, value=""),  # rebuttal toggle
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 1-3
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 4-6
                 gr.update(visible=False, value="")  # consolidated rebuttal
             ),
             inputs=[],
             outputs=[review4_textbox, review5_textbox, review6_textbox,
+                     interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display]
