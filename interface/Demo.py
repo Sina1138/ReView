@@ -28,52 +28,6 @@ def _make_sentence_id(sentence: str) -> str:
     return "sent_" + hashlib.md5(sentence.encode("utf-8")).hexdigest()[:12]
 
 
-def _find_corresponding(
-    sent: str,
-    source_review_indices: list,
-    sentence_lists: list,
-    listener: dict,
-    min_similarity: float = 0.70,
-) -> list:
-    """
-    Find the most semantically similar sentence in each OTHER review using
-    only the listener distribution L_t(d|s).
-
-    Two sentences with similar listener vectors "apply to" the same set of
-    reviewers → they express the same concept in different words.
-
-    Uses dot product of listener probability vectors (equivalent to
-    Bhattacharyya coefficient since vectors are already normalized to sum=1).
-
-    Returns: [(review_num, sentence, similarity), ...] for reviews that have
-             a match above min_similarity.
-    """
-    if sent not in listener:
-        return []
-
-    vec_a = listener[sent]  # {R1: prob, R2: prob, ...}
-    results = []
-
-    for r_idx, sl in enumerate(sentence_lists):
-        if r_idx in source_review_indices:
-            continue  # skip the source review
-
-        best_sent, best_sim = None, 0.0
-        for candidate in sl:
-            if candidate == sent or candidate not in listener:
-                continue
-            vec_b = listener[candidate]
-            # Dot product of probability vectors
-            sim = sum(vec_a.get(k, 0.0) * vec_b.get(k, 0.0) for k in vec_a)
-            if sim > best_sim:
-                best_sim = sim
-                best_sent = candidate
-
-        if best_sent and best_sim >= min_similarity:
-            results.append((r_idx + 1, best_sent, best_sim))
-
-    return results
-
 
 def _get_context(sentence: str, sentence_lists: list):
     """Return (context_before, context_after) strings for the first review containing sentence."""
@@ -124,29 +78,22 @@ def format_summary_cards(
     }
 
     # Render in the order given — selection and filtering happens in compute_rsa_in_background.
-    cards_html = (
-        '<div style="margin-bottom:6px;font-weight:600;font-size:0.9em;color:#374151;">'
-        'Most Common Opinions</div>'
-    )
+    ctx_style = "color:#b0b0b0;font-size:0.85em;font-style:italic;"
+    cards_parts = []
 
     for sent in sentences:
         sent_id = _make_sentence_id(sent)
         context_before, context_after = _get_context(sent, sentence_lists)
-        ctx_style = "color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;"
-        before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
-        after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
 
         # --- Source badge: which review(s) this sentence physically appears in ---
         source_reviews = [r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl]
         source_badge = " ".join(
-            f'<span style="background:#f3f4f6;color:#374151;padding:2px 8px;'
-            f'border-radius:4px;font-size:0.72em;font-weight:600;">From Review {n}</span>'
+            f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
+            f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
             for n in source_reviews
         )
 
-        # --- L_t(d|s) distribution bars: "Applies to" ---
-        # Shows how much the RSA listener thinks this opinion describes each review,
-        # even if the sentence only appears in one review's text.
+        # --- L_t(d|s) distribution bars ---
         dist_html = ""
         if listener and sent in listener:
             dist = listener[sent]
@@ -155,22 +102,22 @@ def format_summary_cards(
                 pct = int(round(prob * 100))
                 bar_w = max(2, int(prob * 80))
                 bar_parts.append(
-                    f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;">'
-                    f'<span style="font-size:0.72em;font-weight:600;color:{badge_fg};">{label}</span>'
-                    f'<span style="display:inline-block;width:{bar_w}px;height:6px;'
+                    f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
+                    f'<span style="font-size:0.7em;font-weight:600;color:{badge_fg};">{label}</span>'
+                    f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
                     f'background:#3b82f6;border-radius:3px;"></span>'
-                    f'<span style="font-size:0.72em;color:#6b7280;">{pct}%</span>'
+                    f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
                     f'</span>'
                 )
             dist_html = (
-                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:5px;">'
+                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
                 f'{source_badge}'
-                f'<span style="color:#d1d5db;font-size:0.8em;">→ Applies to:</span> '
+                f'<span style="color:#d1d5db;font-size:0.75em;">→</span> '
                 + "".join(bar_parts)
                 + "</div>"
             )
         else:
-            dist_html = f'<div style="display:flex;gap:6px;margin-bottom:6px;">{source_badge}</div>'
+            dist_html = f'<div style="display:flex;gap:4px;margin-bottom:3px;">{source_badge}</div>'
 
         # Click-to-scroll via inline JS
         onclick = (
@@ -180,54 +127,33 @@ def format_summary_cards(
             f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
         )
 
-        # --- Corresponding sentences from other reviews ---
-        corr_html = ""
-        if listener:
-            source_indices = [r_idx for r_idx, sl in enumerate(sentence_lists) if sent in sl]
-            correspondences = _find_corresponding(sent, source_indices, sentence_lists, listener)
-            if correspondences:
-                corr_parts = []
-                for r_num, corr_sent, sim in correspondences:
-                    corr_id = _make_sentence_id(corr_sent)
-                    pct_sim = int(round(sim * 100))
-                    corr_onclick = (
-                        f"event.stopPropagation();"
-                        f"var el=document.getElementById('{corr_id}');"
-                        f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-                        f"el.style.outline='3px solid #10b981';"
-                        f"setTimeout(function(){{el.style.outline='';}},2500);}}"
-                    )
-                    corr_parts.append(
-                        f'<div style="margin-top:4px;padding:4px 8px;background:#f0fdf4;'
-                        f'border-radius:4px;cursor:pointer;" onclick="{_html.escape(corr_onclick)}">'
-                        f'<span style="font-size:0.72em;font-weight:600;color:#065f46;">'
-                        f'Review {r_num}</span> '
-                        f'<span style="font-size:0.72em;color:#6b7280;">({pct_sim}% match)</span>'
-                        f'<div style="font-size:0.85em;color:#374151;line-height:1.4;">'
-                        f'{_html.escape(corr_sent[:150])}{"..." if len(corr_sent) > 150 else ""}</div>'
-                        f'</div>'
-                    )
-                corr_html = (
-                    f'<div style="margin-top:6px;border-top:1px solid #e5e7eb;padding-top:6px;">'
-                    f'<div style="font-size:0.72em;font-weight:600;color:#6b7280;margin-bottom:3px;">'
-                    f'Similar in other reviews:</div>'
-                    + "".join(corr_parts)
-                    + "</div>"
-                )
+        # Inline context: ...before SENTENCE after...  (all one line)
+        before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
+        after_span = f'<span style="{ctx_style}"> {_html.escape(context_after)}...</span>' if context_after else ""
 
-        cards_html += (
+        cards_parts.append(
             f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-            f'border-radius:6px;padding:10px 14px;margin-bottom:6px;cursor:pointer;" '
+            f'border-radius:6px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" '
             f'onclick="{_html.escape(onclick)}">'
             f'{dist_html}'
-            f'{before_html}'
-            f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
-            f'{after_html}'
-            f'{corr_html}'
+            f'<div style="color:#111827;line-height:1.5;">'
+            f'{before_span}'
+            f'<span style="font-weight:500;">{_html.escape(sent)}</span>'
+            f'{after_span}'
+            f'</div>'
             f'</div>'
         )
 
-    return cards_html
+    # Wrap in collapsible <details> (open by default)
+    inner = "".join(cards_parts)
+    return (
+        f'<details open style="margin-bottom:8px;">'
+        f'<summary style="cursor:pointer;font-weight:600;font-size:0.9em;color:#374151;'
+        f'margin-bottom:6px;list-style:none;">'
+        f'<span style="margin-right:4px;">▸</span>Most Common Opinions</summary>'
+        f'{inner}'
+        f'</details>'
+    )
 
 
 def format_divergent_cards(
@@ -235,9 +161,9 @@ def format_divergent_cards(
     sentence_lists: list,
     listener: dict,
     speaker: dict,
-) -> str:
+) -> Dict[int, str]:
     """
-    Most Divergent Opinions hub — grouped by reviewer.
+    Most Divergent Opinions — returns per-review HTML dict {review_index: html}.
 
     For each review, finds the sentences where argmax(L_t(d|s)) points to that
     review (i.e., the listener assigns it most strongly to that reviewer) AND
@@ -246,19 +172,17 @@ def format_divergent_cards(
     Shows the top 2 per reviewer.
     """
     if not uniqueness or not listener or not speaker:
-        return ""
+        return {}
 
     import numpy as np
     num_reviews = len(speaker)
     if num_reviews == 0:
-        return ""
+        return {}
 
     median_u = float(np.median(list(uniqueness.values())))
     review_labels = [f"R{i+1}" for i in range(num_reviews)]
 
     # Minimum speaker score to suppress generic filler.
-    # Sentences below this threshold are claimed weakly by all reviewers — likely filler.
-    # Baseline uniform = 1/K; we require at least 2× baseline.
     k = max(sum(len(v) for v in speaker.values()) // max(len(speaker), 1), 1)
     min_speaker_score = 2.0 / k
 
@@ -266,7 +190,7 @@ def format_divergent_cards(
     grouped: dict = {label: [] for label in review_labels}
     for sent, u_score in uniqueness.items():
         if u_score <= median_u:
-            continue  # only above-median uniqueness sentences
+            continue
         if sent not in listener:
             continue
         dist = listener[sent]
@@ -276,7 +200,6 @@ def format_divergent_cards(
         if argmax_label not in grouped:
             continue
         s_score = speaker.get(argmax_label, {}).get(sent, 0.0)
-        # Suppress sentences that no reviewer claims distinctively
         if s_score < min_speaker_score:
             continue
         grouped[argmax_label].append((sent, u_score, s_score))
@@ -286,39 +209,30 @@ def format_divergent_cards(
         grouped[label].sort(key=lambda x: x[2], reverse=True)
         grouped[label] = grouped[label][:2]
 
-    # Only render groups that have at least 1 sentence
-    non_empty = [(label, items) for label, items in grouped.items() if items]
-    if not non_empty:
-        return ""
-
     border_color = "#fca5a5"
-    html_parts = [
-        '<div style="margin-bottom:6px;font-weight:600;font-size:0.9em;color:#374151;">'
-        'Most Divergent Opinions</div>'
-    ]
+    result: Dict[int, str] = {}
 
-    for label, items in non_empty:
-        # Reviewer section heading
-        r_num = label[1:]  # "R1" → "1"
-        html_parts.append(
-            f'<div style="font-size:0.8em;font-weight:600;color:#7f1d1d;'
-            f'margin:8px 0 4px 0;">Reviewer {r_num}\'s Unique Points</div>'
-        )
+    for i, label in enumerate(review_labels):
+        items = grouped[label]
+        if not items:
+            continue
+
+        ctx_style = "color:#b0b0b0;font-size:0.85em;font-style:italic;"
+        html_parts = [
+            '<div style="margin-top:10px;margin-bottom:6px;font-weight:600;font-size:0.82em;color:#7f1d1d;">'
+            f'Unique Points in This Review</div>'
+        ]
         for sent, u_score, s_score in items:
             sent_id = _make_sentence_id(sent)
             context_before, context_after = _get_context(sent, sentence_lists)
-            ctx_style = "color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;"
-            before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
-            after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
 
-            # Show dominant listener probability (how strongly this reviewer "owns" this sentence)
             dom_pct = 0
-            if listener and sent in listener:
+            if sent in listener:
                 dom_pct = int(round(max(listener[sent].values(), default=0.0) * 100))
             uniqueness_badge = (
-                f'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;'
-                f'border-radius:4px;font-size:0.72em;font-weight:600;margin-bottom:5px;display:inline-block;">'
-                f'Unique to {label} &nbsp;·&nbsp; {dom_pct}% listener share</span>'
+                f'<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;'
+                f'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;margin-bottom:3px;">'
+                f'{dom_pct}% listener share</span>'
             )
 
             onclick = (
@@ -328,18 +242,25 @@ def format_divergent_cards(
                 f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
             )
 
+            before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
+            after_span = f'<span style="{ctx_style}"> {_html.escape(context_after)}...</span>' if context_after else ""
+
             html_parts.append(
                 f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-                f'border-radius:6px;padding:10px 14px;margin-bottom:6px;cursor:pointer;" '
+                f'border-radius:6px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" '
                 f'onclick="{_html.escape(onclick)}">'
                 f'{uniqueness_badge}'
-                f'{before_html}'
-                f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
-                f'{after_html}'
+                f'<div style="color:#111827;line-height:1.5;">'
+                f'{before_span}'
+                f'<span style="font-weight:500;">{_html.escape(sent)}</span>'
+                f'{after_span}'
+                f'</div>'
                 f'</div>'
             )
 
-    return "".join(html_parts)
+        result[i] = "".join(html_parts)
+
+    return result
 
 
 def render_agreement_html(
@@ -428,8 +349,17 @@ def render_agreement_html(
         else:
             tooltip_text = f"Score: {score:+.2f}"
 
+        # Inline JS positions the tooltip near the cursor using fixed positioning
+        hover_js = (
+            "var t=this.querySelector('.rsa-tooltip');var r=this.getBoundingClientRect();"
+            "t.style.display='block';"
+            "t.style.left=Math.min(r.left,window.innerWidth-290)+'px';"
+            "t.style.top=(r.top-t.offsetHeight-6)+'px';"
+        )
+        leave_js = "this.querySelector('.rsa-tooltip').style.display='none';"
         parts.append(
-            f'<span id="{sent_id}" class="rsa-sentence" style="background:{bg_color};">'
+            f'<span id="{sent_id}" class="rsa-sentence" style="background:{bg_color};" '
+            f'onmouseenter="{hover_js}" onmouseleave="{leave_js}">'
             f'{_html.escape(sent)} '
             f'<span class="rsa-tooltip">{_html.escape(tooltip_text)}</span>'
             f'</span>'
@@ -697,7 +627,6 @@ def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
 
             response_parts.append(
                 f'<div style="padding:10px 14px;">'
-                f'<div style="font-size:0.75em;color:#92400e;font-weight:600;margin-bottom:4px;">💬 Author Response:</div>'
                 f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
                 f'</div>'
             )
@@ -705,18 +634,27 @@ def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
         if not response_parts:
             return ""
 
-        return f'<div style="{CARD_STYLE}">{"".join(response_parts)}</div>'
+        return (
+            f'<details style="{CARD_STYLE}">'
+            f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+            f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+            f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
+            + "".join(response_parts)
+            + "</details>"
+        )
 
     except (json.JSONDecodeError, TypeError, AttributeError):
         # Plain text - show under first review only
         if review_num == 1:
             text = rebuttal.strip()
             return (
-                f'<div style="{CARD_STYLE}">'
+                f'<details style="{CARD_STYLE}">'
+                f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+                f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+                f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
                 f'<div style="padding:10px 14px;">'
-                f'<div style="font-size:0.75em;color:#92400e;font-weight:600;margin-bottom:4px;">💬 Author Response:</div>'
                 f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
-                f'</div></div>'
+                f'</div></details>'
             )
         return ""
 
@@ -759,23 +697,26 @@ def format_general_rebuttals(rebuttal: str) -> str:
 
         count_label = f"{len(response_parts)} general response{'s' if len(response_parts) > 1 else ''}"
         return (
-            f'<div style="{CARD_STYLE}">'
-            f'<div style="{HEADER_STYLE}"><span style="font-size:1.1em;">💬</span>'
+            f'<details style="{CARD_STYLE}">'
+            f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
+            f'<span style="font-size:1.1em;">💬</span>'
             f'<span style="{TITLE_STYLE}">General Author Response</span>'
-            f'<span style="margin-left:auto;font-size:0.8em;color:#78716c;">{count_label}</span></div>'
+            f'<span style="margin-left:auto;font-size:0.8em;color:#78716c;">{count_label}</span>'
+            f'</summary>'
             + "".join(response_parts) +
-            '</div>'
+            '</details>'
         )
     except (json.JSONDecodeError, TypeError, AttributeError):
         # Plain text - treat as general response
         text = rebuttal.strip()
         return (
-            f'<div style="{CARD_STYLE}">'
-            f'<div style="{HEADER_STYLE}"><span style="font-size:1.1em;">💬</span>'
-            f'<span style="{TITLE_STYLE}">General Author Response</span></div>'
+            f'<details style="{CARD_STYLE}">'
+            f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
+            f'<span style="font-size:1.1em;">💬</span>'
+            f'<span style="{TITLE_STYLE}">General Author Response</span></summary>'
             f'<div style="padding:14px 16px;background:white;">'
             f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.9em;line-height:1.6;">{text}</div>'
-            f'</div></div>'
+            f'</div></details>'
         )
 
 
@@ -917,13 +858,13 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
                 top_common, uniqueness, sentence_lists, "common",
                 listener=listener, speaker=speaker,
             )
-            # --- Most Divergent hub (grouped by reviewer) ---
-            most_unique_text = format_divergent_cards(
+            # --- Most Divergent hub (per-review) ---
+            divergent_per_review = format_divergent_cards(
                 uniqueness, sentence_lists, listener, speaker,
             )
         else:
             most_common_text = ""
-            most_unique_text = ""
+            divergent_per_review = {}
 
         progress(0.90, desc="Formatting agreement results...")
 
@@ -937,13 +878,17 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
                     num_reviews=num_reviews,
                     label=f"Agreement in Review {i + 1}",
                 )
+                # Append this review's divergent cards below the agreement text
+                if i in divergent_per_review:
+                    html_val += divergent_per_review[i]
                 agree_out.append(gr.update(visible=show_agreement, value=html_val))
             else:
                 agree_out.append(gr.update(visible=False, value=""))
 
         progress(1.0, desc="Agreement computation complete!")
 
-        return (*agree_out, most_common_text, most_unique_text)
+        # most_divergent gets empty string — divergent cards are now per-review
+        return (*agree_out, most_common_text, "")
 
     except Exception as e:
         print(f"[RSA ERROR] {type(e).__name__}: {str(e)}")
@@ -967,7 +912,7 @@ CUSTOM_CSS = """
     margin-top: 16px;
 }
 
-/* RSA sentence tooltip styles */
+/* RSA sentence tooltip styles — uses JS positioning via onmouseenter */
 .rsa-sentence {
     position: relative;
     cursor: help;
@@ -976,32 +921,32 @@ CUSTOM_CSS = """
     display: inline;
 }
 .rsa-tooltip {
-    visibility: hidden;
-    position: absolute;
-    bottom: 125%;
-    left: 0;
+    display: none;
+    position: fixed;
     background: #1f2937;
     color: white;
     padding: 6px 10px;
     border-radius: 6px;
     font-size: 0.78em;
-    white-space: nowrap;
-    z-index: 100;
+    z-index: 10000;
     pointer-events: none;
-    max-width: 320px;
+    max-width: 280px;
+    width: max-content;
     white-space: normal;
     box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
-.rsa-sentence:hover .rsa-tooltip {
-    visibility: visible;
-}
+
+/* Collapsible author response toggle */
+details summary::-webkit-details-marker { display: none; }
+details[open] summary span:first-child { display: inline-block; transform: rotate(90deg); }
 """
 
 with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
     # gr.Markdown("# ReView Interface")
     
-    with gr.Tab("Introduction"):
-        gr.Markdown(glimpse_description)
+    # TODO: Uncomment this for home/description tab once finished with testing.
+    # with gr.Tab("Introduction"):
+    #     gr.Markdown(glimpse_description)
         
     # -----------------------------------
     # Pre-processed Tab
@@ -1104,13 +1049,15 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                         review_item = list(review_data["sentences"].items())
                         rebuttal = review_data.get("rebuttal", "")
                         if rebuttal and rebuttal.strip():
-                            # Format rebuttal as HTML card
+                            # Format rebuttal as collapsible HTML card
                             rebuttal_html = (
-                                '<div style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
+                                '<details style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
+                                '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+                                'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+                                '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
                                 '<div style="padding:10px 14px;">'
-                                '<div style="font-size:0.75em;color:#92400e;font-weight:600;margin-bottom:4px;">💬 Author Response:</div>'
                                 f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{rebuttal}</div>'
-                                '</div></div>'
+                                '</div></details>'
                             )
                     else:
                         # Backward compatibility with old format
@@ -1653,9 +1600,9 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 for i in range(MAX_INTERACTIVE_REVIEWS):
                     updates.append(gr.update(visible=(mode == effective_focus and i < active_count)))
 
-            # Most common/divergent only show in Agreement mode (and not while processing)
+            # Most common shows in Agreement mode; most_divergent is now per-review (always hidden here)
             show_opinions = effective_focus == "Agreement" and focus != "Agreement (Processing)"
-            updates.append(gr.update(visible=show_opinions))  # most_divergent
+            updates.append(gr.update(visible=False))  # most_divergent (per-review now, always hidden)
             updates.append(gr.update(visible=show_opinions))  # most_common
 
             return tuple(updates)
