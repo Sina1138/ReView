@@ -67,16 +67,16 @@ def format_summary_cards(
     badge_bg = "#dbeafe"
     badge_fg = "#1e40af"
 
-    # --- Re-rank by informativeness when full RSA data is available ---
-    if speaker and listener:
-        num_reviews = len(speaker)
-        # Compute composite score: informativeness * (1 - abs(normalized_uniqueness))
-        def composite(s):
-            info = compute_informativeness(s, speaker, num_reviews)
-            u = abs(scores.get(s, 0.0))
-            return info * (1.0 - u)
-        sentences = sorted(sentences, key=composite, reverse=True)
+    # Pre-compute expected listener share per reviewer from review lengths.
+    # Used for bar chart normalization (bar width = deviation from expected, not raw prob).
+    num_reviews = len(sentence_lists)
+    total_sents = sum(len(sl) for sl in sentence_lists) or 1
+    expected_share = {
+        f"R{i+1}": len(sl) / total_sents
+        for i, sl in enumerate(sentence_lists)
+    }
 
+    # Render in the order given — selection and filtering happens in compute_rsa_in_background.
     cards_html = (
         '<div style="margin-bottom:6px;font-weight:600;font-size:0.9em;color:#374151;">'
         'Most Common Opinions</div>'
@@ -89,14 +89,24 @@ def format_summary_cards(
         before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
         after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
 
-        # --- L_t(d|s) distribution bars ---
+        # --- Source badge: which review(s) this sentence physically appears in ---
+        source_reviews = [r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl]
+        source_badge = " ".join(
+            f'<span style="background:#f3f4f6;color:#374151;padding:2px 8px;'
+            f'border-radius:4px;font-size:0.72em;font-weight:600;">From Review {n}</span>'
+            for n in source_reviews
+        )
+
+        # --- L_t(d|s) distribution bars: "Applies to" ---
+        # Shows how much the RSA listener thinks this opinion describes each review,
+        # even if the sentence only appears in one review's text.
         dist_html = ""
         if listener and sent in listener:
             dist = listener[sent]
             bar_parts = []
             for label, prob in sorted(dist.items()):
                 pct = int(round(prob * 100))
-                bar_w = max(2, int(prob * 80))  # max bar width 80px
+                bar_w = max(2, int(prob * 80))
                 bar_parts.append(
                     f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;">'
                     f'<span style="font-size:0.72em;font-weight:600;color:{badge_fg};">{label}</span>'
@@ -106,20 +116,14 @@ def format_summary_cards(
                     f'</span>'
                 )
             dist_html = (
-                f'<div style="display:flex;flex-wrap:wrap;margin-bottom:5px;">'
+                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:5px;">'
+                f'{source_badge}'
+                f'<span style="color:#d1d5db;font-size:0.8em;">→ Applies to:</span> '
                 + "".join(bar_parts)
                 + "</div>"
             )
         else:
-            # Fallback: plain review badges
-            review_badges = [
-                r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl
-            ]
-            dist_html = '<div style="display:flex;gap:6px;margin-bottom:6px;">' + " ".join(
-                f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 8px;'
-                f'border-radius:4px;font-size:0.72em;font-weight:600;">Review {n}</span>'
-                for n in review_badges
-            ) + "</div>"
+            dist_html = f'<div style="display:flex;gap:6px;margin-bottom:6px;">{source_badge}</div>'
 
         # Click-to-scroll via inline JS
         onclick = (
@@ -169,21 +173,30 @@ def format_divergent_cards(
     median_u = float(np.median(list(uniqueness.values())))
     review_labels = [f"R{i+1}" for i in range(num_reviews)]
 
+    # Minimum speaker score to suppress generic filler.
+    # Sentences below this threshold are claimed weakly by all reviewers — likely filler.
+    # Baseline uniform = 1/K; we require at least 2× baseline.
+    k = max(sum(len(v) for v in speaker.values()) // max(len(speaker), 1), 1)
+    min_speaker_score = 2.0 / k
+
     # Group sentences by their argmax review
     grouped: dict = {label: [] for label in review_labels}
     for sent, u_score in uniqueness.items():
         if u_score <= median_u:
-            continue  # only unique sentences
+            continue  # only above-median uniqueness sentences
         if sent not in listener:
             continue
         dist = listener[sent]
         if not dist:
             continue
         argmax_label = max(dist, key=lambda k: dist[k])
-        if argmax_label in grouped:
-            # Score = speaker probability for this review
-            s_score = speaker.get(argmax_label, {}).get(sent, 0.0)
-            grouped[argmax_label].append((sent, u_score, s_score))
+        if argmax_label not in grouped:
+            continue
+        s_score = speaker.get(argmax_label, {}).get(sent, 0.0)
+        # Suppress sentences that no reviewer claims distinctively
+        if s_score < min_speaker_score:
+            continue
+        grouped[argmax_label].append((sent, u_score, s_score))
 
     # Sort each group by speaker score descending and take top 2
     for label in review_labels:
@@ -208,18 +221,21 @@ def format_divergent_cards(
             f'<div style="font-size:0.8em;font-weight:600;color:#7f1d1d;'
             f'margin:8px 0 4px 0;">Reviewer {r_num}\'s Unique Points</div>'
         )
-        for sent, u_score, _ in items:
+        for sent, u_score, s_score in items:
             sent_id = _make_sentence_id(sent)
             context_before, context_after = _get_context(sent, sentence_lists)
             ctx_style = "color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;"
             before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
             after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
 
-            pct = int(round(min(u_score * 100, 100)))
+            # Show dominant listener probability (how strongly this reviewer "owns" this sentence)
+            dom_pct = 0
+            if listener and sent in listener:
+                dom_pct = int(round(max(listener[sent].values(), default=0.0) * 100))
             uniqueness_badge = (
                 f'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;'
                 f'border-radius:4px;font-size:0.72em;font-weight:600;margin-bottom:5px;display:inline-block;">'
-                f'Uniqueness {pct}%</span>'
+                f'Unique to {label} &nbsp;·&nbsp; {dom_pct}% listener share</span>'
             )
 
             onclick = (
@@ -256,7 +272,7 @@ def render_agreement_html(
 
     Each sentence gets:
     - Continuous opacity from score magnitude (strongest opinions most vivid)
-    - CSS hover tooltip showing L_t(d|s): "Applies to: R1 (40%) · R2 (45%)"
+    - CSS hover tooltip showing L_t(d|s): "R1 (40%) · R2 (45%)"
     - Informativeness dimming for generic common filler
     - Sentence ID for click-to-scroll from summary cards
     """
@@ -292,22 +308,28 @@ def render_agreement_html(
 
         # --- Color and opacity ---
         if score < 0:
-            # Common: blue
-            exp = AGREEMENT_AMP_COMMON
+            # Common: blue — opacity from listener ENTROPY so more balanced = more vivid.
+            # This ensures a sentence with R1 47%/R2 24%/R3 29% (balanced) is bluer
+            # than one with R1 68%/R2 27%/R3 5% (concentrated).
             r, g, b = 59, 130, 246
+            if listener and sent in listener:
+                dist = listener[sent]
+                max_entropy = math.log(max(num_reviews, 2))
+                entropy = sum(-p * math.log(p) for p in dist.values() if p > 0)
+                # Normalize to [0, 1] and apply amplification exponent
+                opacity = (entropy / max_entropy) ** AGREEMENT_AMP_COMMON if max_entropy > 0 else 0.0
+            else:
+                opacity = abs(score) ** AGREEMENT_AMP_COMMON
+
+            # Informativeness dimming for generic filler
+            if speaker:
+                info = compute_informativeness(sent, speaker, num_reviews)
+                if info < info_threshold:
+                    opacity *= 0.3
         else:
-            # Unique: red
-            exp = AGREEMENT_AMP_UNIQUE
+            # Unique: red — opacity from score magnitude (as before)
             r, g, b = 239, 68, 68
-
-        opacity = abs(score) ** exp
-
-        # --- Informativeness dimming for common sentences ---
-        if score < 0 and speaker:
-            info = compute_informativeness(sent, speaker, num_reviews)
-            if info < info_threshold:
-                # Dim generic filler to 30% of normal opacity
-                opacity *= 0.3
+            opacity = abs(score) ** AGREEMENT_AMP_UNIQUE
 
         bg_color = f"rgba({r},{g},{b},{opacity:.3f})"
 
@@ -319,7 +341,7 @@ def render_agreement_html(
                 f"{lbl} {int(round(p * 100))}%"
                 for lbl, p in sorted(dist.items())
             )
-            tooltip_text = f"Applies to: {parts_tooltip}"
+            tooltip_text = f"{parts_tooltip}"
         else:
             tooltip_text = f"Score: {score:+.2f}"
 
@@ -780,15 +802,36 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
         listener = rsa_result.get("listener", {}) if rsa_result else {}
         speaker = rsa_result.get("speaker", {}) if rsa_result else {}
 
-        # --- Most Common hub (smart ranking by informativeness × (1 − uniqueness)) ---
+        # --- Most Common hub ---
         if uniqueness:
             import pandas as _pd
             scores_series = _pd.Series(uniqueness)
-            # Seed list: bottom half by uniqueness (most common sentences)
-            median_u = float(scores_series.median())
-            common_candidates = scores_series[scores_series <= median_u].nsmallest(10).index.tolist()
+
+            # Step 1: Take the 15 most common sentences by raw uniqueness score.
+            # The RSA math is authoritative here — trust the ranking it produces.
+            n_seed = min(15, len(scores_series))
+            seed = scores_series.nsmallest(n_seed).index.tolist()
+
+            # Step 2: Re-rank by listener ENTROPY — sentences with balanced
+            # distributions across reviewers (high entropy) are genuinely "common".
+            # This naturally surfaces R1 63% / R2 33% / R3 4% above R1 86% / R2 7% / R3 7%
+            # because entropy rewards spread, not concentration.
+            # Informativeness (max speaker) is wrong here — it rewards single-reviewer
+            # dominance, which is the opposite of "common".
+            if listener:
+                def _listener_entropy(sent):
+                    dist = listener.get(sent, {})
+                    ent = 0.0
+                    for p in dist.values():
+                        if p > 0:
+                            ent -= p * math.log(p)
+                    return ent
+                seed.sort(key=_listener_entropy, reverse=True)
+
+            # Step 3: Show top 5 (highest entropy = most balanced = best common).
+            top_common = seed[:5]
             most_common_text = format_summary_cards(
-                common_candidates, uniqueness, sentence_lists, "common",
+                top_common, uniqueness, sentence_lists, "common",
                 listener=listener, speaker=speaker,
             )
             # --- Most Divergent hub (grouped by reviewer) ---
@@ -1488,7 +1531,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 "",                                              # clear paste_rebuttal
                 3,                                               # reset count
                 "", "",                                          # clear most common/divergent
-                *([None] * 6), *([" "] * 6), *([None] * 6), *([None] * 6),   # clear all output panels (none, agree, polar, topic)
+                *([None] * 6), *([""] * 6), *([None] * 6), *([None] * 6),   # clear all output panels (none, agree, polar, topic)
                 {},                                              # reset rsa_computation_state
             ),
             inputs=[],
