@@ -313,15 +313,20 @@ def render_agreement_html(
         # --- Color and opacity ---
         if score < 0:
             # Common: blue — opacity from listener ENTROPY so more balanced = more vivid.
-            # This ensures a sentence with R1 47%/R2 24%/R3 29% (balanced) is bluer
-            # than one with R1 68%/R2 27%/R3 5% (concentrated).
             r, g, b = 59, 130, 246
             if listener and sent in listener:
                 dist = listener[sent]
+                max_prob = max(dist.values(), default=0.0)
                 max_entropy = math.log(max(num_reviews, 2))
                 entropy = sum(-p * math.log(p) for p in dist.values() if p > 0)
-                # Normalize to [0, 1] and apply amplification exponent
-                opacity = (entropy / max_entropy) ** AGREEMENT_AMP_COMMON if max_entropy > 0 else 0.0
+
+                # If listener is highly concentrated on one reviewer (>70%), the RSA
+                # uniqueness score and listener disagree — trust the listener and
+                # suppress blue. This prevents e.g. R2 91% sentences from appearing blue.
+                if max_prob > 0.70:
+                    opacity = 0.0
+                else:
+                    opacity = (entropy / max_entropy) ** AGREEMENT_AMP_COMMON if max_entropy > 0 else 0.0
             else:
                 opacity = abs(score) ** AGREEMENT_AMP_COMMON
 
