@@ -1043,61 +1043,61 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                     q25, q75 = float(_np.percentile(arr, 25)), float(_np.percentile(arr, 75))
                     _kl_iqr = q75 - q25
 
+            # Build per-review sentence lists (needed for agreement HTML + summary cards)
+            review_sentence_lists = []
+            review_items_cache = []  # Cache (review_item, rebuttal_html) per review
+            for idx in range(number_of_displayed_reviews):
+                review_data = current_review[idx]
+                rebuttal_html = ""
+                if isinstance(review_data, dict) and "sentences" in review_data:
+                    review_item = list(review_data["sentences"].items())
+                    rebuttal = review_data.get("rebuttal", "")
+                    if rebuttal and rebuttal.strip():
+                        rebuttal_html = (
+                            '<details style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
+                            '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+                            'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+                            '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
+                            '<div style="padding:10px 14px;">'
+                            f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{rebuttal}</div>'
+                            '</div></details>'
+                        )
+                else:
+                    review_item = list(review_data.items())
+                review_sentence_lists.append([s for s, _ in review_item])
+                review_items_cache.append((review_item, rebuttal_html))
+
+            # For agreement mode, build uniqueness dict upfront for render_agreement_html
+            if show_consensuality:
+                for idx in range(number_of_displayed_reviews):
+                    review_item, _ = review_items_cache[idx]
+                    for sentence, metadata in review_item:
+                        raw = metadata.get("consensuality", 0.0)
+                        if _kl_iqr > 0:
+                            score = max(-1.0, min(1.0, (raw - _kl_median) / (_kl_iqr * 2)))
+                        else:
+                            score = 0.0
+                        if not is_noise_sentence(sentence) and abs(score) >= HIGHLIGHT_THRESHOLD:
+                            consensuality_dict[sentence] = score
+
+            agreement_updates = []
             for i in range(10):
                 if i < number_of_displayed_reviews:
-                    # Handle new structure: current_review[i] can be dict with "sentences" and "rebuttal"
-                    # OR old structure: just a dict of sentences
-                    review_data = current_review[i]
-                    rebuttal_html = ""
-
-                    if isinstance(review_data, dict) and "sentences" in review_data:
-                        review_item = list(review_data["sentences"].items())
-                        rebuttal = review_data.get("rebuttal", "")
-                        if rebuttal and rebuttal.strip():
-                            # Format rebuttal as collapsible HTML card
-                            rebuttal_html = (
-                                '<details style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
-                                '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-                                'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-                                '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-                                '<div style="padding:10px 14px;">'
-                                f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{rebuttal}</div>'
-                                '</div></details>'
-                            )
-                    else:
-                        # Backward compatibility with old format
-                        review_item = list(review_data.items())
+                    review_item, rebuttal_html = review_items_cache[i]
 
                     if show_polarity:
                         highlighted = []
                         for sentence, metadata in review_item:
                             polarity = metadata.get("polarity", None)
                             if polarity == 2:
-                                label = "➕"  # positive
+                                label = "➕"
                             elif polarity == 0:
-                                label = "➖"  # negative
+                                label = "➖"
                             else:
-                                label = None  # neutral (1)
+                                label = None
                             highlighted.append((sentence, label))
                     elif show_consensuality:
-                        highlighted = []
-                        import math
-                        for sentence, metadata in review_item:
-                            raw = metadata.get("consensuality", 0.0)
-                            # Robust normalization: median-centered, IQR-scaled, clipped to [-1, 1]
-                            if _kl_iqr > 0:
-                                score = max(-1.0, min(1.0, (raw - _kl_median) / (_kl_iqr * 2)))
-                            else:
-                                score = 0.0
-                            # Display-time filtering: noise sentences and near-zero scores get no color
-                            if is_noise_sentence(sentence) or abs(score) < HIGHLIGHT_THRESHOLD:
-                                highlighted.append((sentence, None))
-                            else:
-                                consensuality_dict[sentence] = score
-                                # Asymmetric amplification for display
-                                display_score = math.copysign(abs(score) ** (AGREEMENT_AMP_UNIQUE if score > 0 else AGREEMENT_AMP_COMMON), score)
-                                highlighted.append((sentence, display_score))
-                        
+                        highlighted = [(sentence, None) for sentence, _ in review_item]
                     elif show_topic:
                         highlighted = []
                         for sentence, metadata in review_item:
@@ -1112,15 +1112,30 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                             for sentence, _ in review_item
                         ]
 
+                    # HighlightedText: visible for all modes except agreement
                     review_updates.append(
                         gr.update(
-                            visible=True,
+                            visible=not show_consensuality,
                             value=highlighted,
                             color_map=color_map,
                             show_legend=legend,
                             key=f"updated_{score_type}_{i}"
                         )
                     )
+
+                    # Agreement HTML: visible only in agreement mode
+                    if show_consensuality:
+                        sentences_for_review = [s for s, _ in review_item]
+                        agreement_html = render_agreement_html(
+                            sentences_for_review, consensuality_dict,
+                            listener={}, speaker={},
+                            num_reviews=number_of_displayed_reviews,
+                            label=f"Agreement in Review {i + 1}",
+                        )
+                        agreement_updates.append(gr.update(visible=True, value=agreement_html))
+                    else:
+                        agreement_updates.append(gr.update(visible=False, value=""))
+
                     rebuttal_updates.append(gr.update(visible=bool(rebuttal_html), value=rebuttal_html))
                 else:
                     review_updates.append(
@@ -1132,32 +1147,23 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                             key=f"updated_{score_type}_{i}"
                         )
                     )
+                    agreement_updates.append(gr.update(visible=False, value=""))
                     rebuttal_updates.append(gr.update(visible=False, value=""))
 
             # General rebuttal display (currently unused in new format, kept for backward compat)
             general_rebuttal_update = gr.update(visible=False, value="")
 
-            # Set most consensual / unique sentences (as HTML cards with context)
+            # Set most common opinions (as HTML cards with context)
+            # Most Unique/Divergent is hidden at top level — consistent with
+            # the interactive tab which embeds divergent cards per-review.
             if show_consensuality and consensuality_dict:
                 scores = pd.Series(consensuality_dict)
-                most_unique = scores.sort_values(ascending=False).head(3).index.tolist()
-                most_common = scores.sort_values(ascending=True).head(3).index.tolist()
-
-                # Build per-review sentence lists for attribution
-                review_sentence_lists = []
-                for review_data in current_review:
-                    if isinstance(review_data, dict) and "sentences" in review_data:
-                        review_sentence_lists.append(list(review_data["sentences"].keys()))
-                    elif isinstance(review_data, dict):
-                        review_sentence_lists.append(list(review_data.keys()))
-                    else:
-                        review_sentence_lists.append([])
+                most_common = scores.sort_values(ascending=True).head(5).index.tolist()
 
                 most_common_html = format_summary_cards(most_common, consensuality_dict, review_sentence_lists, "common")
-                most_unique_html = format_summary_cards(most_unique, consensuality_dict, review_sentence_lists, "unique")
 
                 most_common_visibility = gr.update(visible=True, value=most_common_html)
-                most_unique_visibility = gr.update(visible=True, value=most_unique_html)
+                most_unique_visibility = gr.update(visible=False, value="")
             else:
                 most_common_visibility = gr.update(visible=False, value="")
                 most_unique_visibility = gr.update(visible=False, value="")
@@ -1183,6 +1189,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             return (
                 new_review_id,
                 *review_updates,
+                *agreement_updates,  # 10 agreement HTML sections
                 most_common_visibility,
                 most_unique_visibility,
                 topic_color_map_visibility,
@@ -1195,7 +1202,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
 
         # Precompute the initial outputs so something is shown on load.
         init_display = update_review_display(initial_state, score_type="Original")
-        # init_display returns: (review_id, review1..10, most_common, most_unique, topic_box, prep_rebuttal1..10, prep_general_rebuttal, state)
+        # init_display returns: (review_id, review1..10, agreement1..10, most_common, most_unique, topic_box, prep_rebuttal1..10, prep_general_rebuttal, state)
 
         with gr.Row():
             
@@ -1211,7 +1218,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 year = gr.Dropdown(choices=years, label="Select Year", interactive=True, value=initial_year)
                 score_type = gr.Radio(
                     choices=["No Highlighting", "Polarity", "Topic", "Agreement"],
-                    label="Score Type to Display",
+                    label="Display Mode:",
                     value="No Highlighting",
                     interactive=True
                 )
@@ -1239,24 +1246,34 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
         
         gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
         review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
+        prep_agreement1 = gr.HTML(visible=False, value="")
         prep_rebuttal1 = gr.HTML(visible=False, value="")
         review2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=number_of_displayed_reviews >= 2, key="initial_review2")
+        prep_agreement2 = gr.HTML(visible=False, value="")
         prep_rebuttal2 = gr.HTML(visible=False, value="")
         review3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=number_of_displayed_reviews >= 3, key="initial_review3")
+        prep_agreement3 = gr.HTML(visible=False, value="")
         prep_rebuttal3 = gr.HTML(visible=False, value="")
         review4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=number_of_displayed_reviews >= 4, key="initial_review4")
+        prep_agreement4 = gr.HTML(visible=False, value="")
         prep_rebuttal4 = gr.HTML(visible=False, value="")
         review5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=number_of_displayed_reviews >= 5, key="initial_review5")
+        prep_agreement5 = gr.HTML(visible=False, value="")
         prep_rebuttal5 = gr.HTML(visible=False, value="")
         review6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=number_of_displayed_reviews >= 6, key="initial_review6")
+        prep_agreement6 = gr.HTML(visible=False, value="")
         prep_rebuttal6 = gr.HTML(visible=False, value="")
         review7 = gr.HighlightedText(show_legend=False, label="📝 Review 7", visible=number_of_displayed_reviews >= 7, key="initial_review7")
+        prep_agreement7 = gr.HTML(visible=False, value="")
         prep_rebuttal7 = gr.HTML(visible=False, value="")
         review8 = gr.HighlightedText(show_legend=False, label="📝 Review 8", visible=number_of_displayed_reviews >= 8, key="initial_review8")
+        prep_agreement8 = gr.HTML(visible=False, value="")
         prep_rebuttal8 = gr.HTML(visible=False, value="")
         review9 = gr.HighlightedText(show_legend=False, label="📝 Review 9", visible=number_of_displayed_reviews >= 9, key="initial_review9")
+        prep_agreement9 = gr.HTML(visible=False, value="")
         prep_rebuttal9 = gr.HTML(visible=False, value="")
         review10 = gr.HighlightedText(show_legend=False, label="📝 Review 10", visible=number_of_displayed_reviews >= 10, key="initial_review10")
+        prep_agreement10 = gr.HTML(visible=False, value="")
         prep_rebuttal10 = gr.HTML(visible=False, value="")
 
         # General rebuttal section (for rebuttals not tied to specific reviews)
@@ -1283,7 +1300,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
+        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
         year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
         score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
         next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
