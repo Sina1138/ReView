@@ -28,6 +28,53 @@ def _make_sentence_id(sentence: str) -> str:
     return "sent_" + hashlib.md5(sentence.encode("utf-8")).hexdigest()[:12]
 
 
+def _find_corresponding(
+    sent: str,
+    source_review_indices: list,
+    sentence_lists: list,
+    listener: dict,
+    min_similarity: float = 0.70,
+) -> list:
+    """
+    Find the most semantically similar sentence in each OTHER review using
+    only the listener distribution L_t(d|s).
+
+    Two sentences with similar listener vectors "apply to" the same set of
+    reviewers → they express the same concept in different words.
+
+    Uses dot product of listener probability vectors (equivalent to
+    Bhattacharyya coefficient since vectors are already normalized to sum=1).
+
+    Returns: [(review_num, sentence, similarity), ...] for reviews that have
+             a match above min_similarity.
+    """
+    if sent not in listener:
+        return []
+
+    vec_a = listener[sent]  # {R1: prob, R2: prob, ...}
+    results = []
+
+    for r_idx, sl in enumerate(sentence_lists):
+        if r_idx in source_review_indices:
+            continue  # skip the source review
+
+        best_sent, best_sim = None, 0.0
+        for candidate in sl:
+            if candidate == sent or candidate not in listener:
+                continue
+            vec_b = listener[candidate]
+            # Dot product of probability vectors
+            sim = sum(vec_a.get(k, 0.0) * vec_b.get(k, 0.0) for k in vec_a)
+            if sim > best_sim:
+                best_sim = sim
+                best_sent = candidate
+
+        if best_sent and best_sim >= min_similarity:
+            results.append((r_idx + 1, best_sent, best_sim))
+
+    return results
+
+
 def _get_context(sentence: str, sentence_lists: list):
     """Return (context_before, context_after) strings for the first review containing sentence."""
     for sl in sentence_lists:
@@ -133,6 +180,41 @@ def format_summary_cards(
             f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
         )
 
+        # --- Corresponding sentences from other reviews ---
+        corr_html = ""
+        if listener:
+            source_indices = [r_idx for r_idx, sl in enumerate(sentence_lists) if sent in sl]
+            correspondences = _find_corresponding(sent, source_indices, sentence_lists, listener)
+            if correspondences:
+                corr_parts = []
+                for r_num, corr_sent, sim in correspondences:
+                    corr_id = _make_sentence_id(corr_sent)
+                    pct_sim = int(round(sim * 100))
+                    corr_onclick = (
+                        f"event.stopPropagation();"
+                        f"var el=document.getElementById('{corr_id}');"
+                        f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+                        f"el.style.outline='3px solid #10b981';"
+                        f"setTimeout(function(){{el.style.outline='';}},2500);}}"
+                    )
+                    corr_parts.append(
+                        f'<div style="margin-top:4px;padding:4px 8px;background:#f0fdf4;'
+                        f'border-radius:4px;cursor:pointer;" onclick="{_html.escape(corr_onclick)}">'
+                        f'<span style="font-size:0.72em;font-weight:600;color:#065f46;">'
+                        f'Review {r_num}</span> '
+                        f'<span style="font-size:0.72em;color:#6b7280;">({pct_sim}% match)</span>'
+                        f'<div style="font-size:0.85em;color:#374151;line-height:1.4;">'
+                        f'{_html.escape(corr_sent[:150])}{"..." if len(corr_sent) > 150 else ""}</div>'
+                        f'</div>'
+                    )
+                corr_html = (
+                    f'<div style="margin-top:6px;border-top:1px solid #e5e7eb;padding-top:6px;">'
+                    f'<div style="font-size:0.72em;font-weight:600;color:#6b7280;margin-bottom:3px;">'
+                    f'Similar in other reviews:</div>'
+                    + "".join(corr_parts)
+                    + "</div>"
+                )
+
         cards_html += (
             f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
             f'border-radius:6px;padding:10px 14px;margin-bottom:6px;cursor:pointer;" '
@@ -141,6 +223,7 @@ def format_summary_cards(
             f'{before_html}'
             f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
             f'{after_html}'
+            f'{corr_html}'
             f'</div>'
         )
 
