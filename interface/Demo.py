@@ -313,6 +313,292 @@ def format_summary_cards(
     )
 
 
+def _normalize_polarity(val) -> Optional[str]:
+    """Normalize polarity from any format to 'positive'/'negative'/None."""
+    if val == "➕" or val == 2 or val == "positive":
+        return "positive"
+    if val == "➖" or val == 0 or val == "negative":
+        return "negative"
+    return None  # neutral or unknown
+
+
+def format_common_themes(
+    sentence_lists: list,
+    polarity_map: dict,
+    topic_map: dict,
+    speaker: dict = None,
+    uniqueness: dict = None,
+    listener: dict = None,
+) -> str:
+    """
+    Common Themes Across Reviews — groups sentences by topic, then shows
+    polarity breakdown within each topic.
+
+    A topic is "common" if sentences from ≥2 different reviewers share it.
+    Each topic card shows a polarity percentage bar and representative
+    sentences per reviewer under each polarity sub-group.
+
+    Falls back to RSA-based generic sentences if no common themes are found.
+    """
+    num_reviews = len(sentence_lists)
+    if num_reviews < 2:
+        return ""
+
+    # --- Step 1: Build per-sentence (topic, polarity) index ---
+    from collections import defaultdict
+
+    # topic_data[topic][polarity][r_idx] = [sentences]
+    topic_data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+
+    for r_idx, sl in enumerate(sentence_lists):
+        for sent in sl:
+            if _should_break_before(sent) or _is_review_header(sent):
+                continue
+            if len(sent.split()) < 5:
+                continue
+            topic = topic_map.get(sent)
+            polarity = _normalize_polarity(polarity_map.get(sent))
+            if topic is None and polarity is None:
+                continue
+            topic_key = topic if topic else "Other"
+            polarity_key = polarity if polarity else "neutral"
+            topic_data[topic_key][polarity_key][r_idx].append(sent)
+
+    # --- Step 2: Filter to topics with ≥2 unique reviewers ---
+    common_topics = []
+    for topic, pol_dict in topic_data.items():
+        all_reviewers = set()
+        total_sents = 0
+        for pol, rev_dict in pol_dict.items():
+            all_reviewers.update(rev_dict.keys())
+            total_sents += sum(len(s) for s in rev_dict.values())
+        if len(all_reviewers) < 2:
+            continue
+        common_topics.append((topic, len(all_reviewers), total_sents, pol_dict))
+
+    # Prefer topics that have non-neutral polarity entries
+    has_sentiment = [t for t in common_topics
+                     if any(p in t[3] for p in ("positive", "negative"))]
+    if len(has_sentiment) >= 1:
+        common_topics = has_sentiment
+
+    # Rank by reviewer count (desc), then sentence count (desc); push "Other" to bottom
+    common_topics.sort(key=lambda t: (0 if t[0] == "Other" else 1, t[1], t[2]), reverse=True)
+
+    # --- Fallback: Generic Sentences ---
+    if not common_topics:
+        if not uniqueness:
+            return ""
+        import pandas as _pd
+        scores_series = _pd.Series(uniqueness)
+        n_seed = min(5, len(scores_series))
+        fallback = scores_series.nsmallest(n_seed).index.tolist()
+        if not fallback:
+            return ""
+
+        parts = [
+            '<details open style="margin-bottom:10px;border:1px solid #d1d5db;border-radius:8px;'
+            'padding:0;overflow:hidden;">',
+            '<summary style="cursor:pointer;font-weight:700;font-size:0.92em;color:#1f2937;'
+            'padding:10px 14px;list-style:none;background:#f9fafb;border-bottom:1px solid #e5e7eb;'
+            'user-select:none;display:flex;align-items:center;gap:6px;">'
+            '<span class="collapse-arrow" style="display:inline-block;transition:transform 0.2s;'
+            'font-size:0.75em;">&#9660;</span>'
+            'Generic Sentences</summary>',
+            '<div style="padding:8px 10px;">',
+            '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:6px;'
+            'padding:8px 12px;margin-bottom:8px;font-size:0.82em;color:#92400e;">'
+            'No shared themes detected across reviewers. Showing sentences with lowest '
+            'RSA uniqueness score (most generic across reviews).</div>',
+        ]
+        for sent in fallback:
+            sent_id = _make_sentence_id(sent)
+            source = [r + 1 for r, sl in enumerate(sentence_lists) if sent in sl]
+            badges = " ".join(
+                f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
+                f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
+                for n in source
+            )
+            # Listener distribution bars
+            dist_html = ""
+            if listener and sent in listener:
+                dist = listener[sent]
+                bar_parts = []
+                for label, prob in sorted(dist.items()):
+                    pct = int(round(prob * 100))
+                    bar_w = max(2, int(prob * 80))
+                    bar_parts.append(
+                        f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
+                        f'<span style="font-size:0.7em;font-weight:600;color:#1e40af;">{label}</span>'
+                        f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
+                        f'background:#3b82f6;border-radius:3px;"></span>'
+                        f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
+                        f'</span>'
+                    )
+                dist_html = (
+                    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
+                    f'{badges}'
+                    f'<span style="color:#d1d5db;font-size:0.75em;">→</span> '
+                    + "".join(bar_parts) + "</div>"
+                )
+            else:
+                dist_html = f'<div style="margin-bottom:2px;">{badges}</div>'
+
+            onclick = (
+                f"(function(){{var el=document.getElementById('{sent_id}');"
+                f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+                f"el.style.outline='3px solid #3b82f6';"
+                f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
+            )
+            parts.append(
+                f'<div style="border:1px solid #e5e7eb;border-left:3px solid #d1d5db;'
+                f'border-radius:6px;padding:6px 10px;margin-bottom:4px;cursor:pointer;" '
+                f'onclick="{_html.escape(onclick)}">'
+                f'{dist_html}'
+                f'<span style="color:#111827;">{_html.escape(sent)}</span>'
+                f'</div>'
+            )
+        parts.append('</div></details>')
+        return "".join(parts)
+
+    # --- Step 3: Render topic cards with polarity breakdown ---
+    _pol_colors = {"negative": "#ef4444", "positive": "#22c55e", "neutral": "#9ca3af"}
+    _pol_labels = {"negative": "Negative", "positive": "Positive", "neutral": "Neutral"}
+    # Render order: negative first (concerns), then positive, then neutral
+    _pol_order = ["negative", "positive", "neutral"]
+
+    def _pick_best(sents, r_idx):
+        """Pick best sentence by speaker score for this reviewer."""
+        r_label = f"R{r_idx + 1}"
+        if speaker and r_label in speaker:
+            sp = speaker[r_label]
+            scored = [(s, sp.get(s, 0.0)) for s in sents]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return scored[0][0]
+        return sents[0]
+
+    def _sent_row(sent, r_idx):
+        """Render a single sentence row with R# badge and click-to-scroll."""
+        r_label = f"R{r_idx + 1}"
+        sent_id = _make_sentence_id(sent)
+        onclick = (
+            f"(function(){{var el=document.getElementById('{sent_id}');"
+            f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+            f"el.style.outline='3px solid #3b82f6';"
+            f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
+        )
+        return (
+            f'<div style="display:flex;align-items:baseline;gap:6px;padding:2px 0;'
+            f'padding-left:8px;cursor:pointer;" '
+            f'onclick="{_html.escape(onclick)}">'
+            f'<span style="background:#f3f4f6;color:#374151;padding:1px 5px;'
+            f'border-radius:3px;font-size:0.7em;font-weight:600;flex-shrink:0;">{r_label}</span>'
+            f'<span style="color:#374151;font-size:0.85em;line-height:1.4;">{_html.escape(sent)}</span>'
+            f'</div>'
+        )
+
+    cards = []
+    for topic, n_reviewers, total_sents, pol_dict in common_topics:
+        border_color = _TOPIC_HTML_COLORS.get(topic, "#d1d5db")
+        reviewer_text = (
+            f"All {num_reviews} reviewers" if n_reviewers == num_reviews
+            else f"{n_reviewers} of {num_reviews} reviewers"
+        )
+
+        # --- Polarity percentage bar ---
+        pol_counts = {}
+        for pol in _pol_order:
+            if pol in pol_dict:
+                pol_counts[pol] = sum(len(s) for s in pol_dict[pol].values())
+        total = sum(pol_counts.values()) or 1
+
+        # Inline polarity bar + labels (compact, on one line)
+        _pol_colors_soft = {"negative": "#f87171", "positive": "#4ade80", "neutral": "#d1d5db"}
+        bar_segments = []
+        bar_labels = []
+        for pol in _pol_order:
+            cnt = pol_counts.get(pol, 0)
+            if cnt == 0:
+                continue
+            pct = round(cnt / total * 100)
+            color = _pol_colors_soft[pol]
+            bar_segments.append(
+                f'<span style="display:inline-block;height:6px;width:{max(pct, 4)}%;'
+                f'background:{color};opacity:0.75;"></span>'
+            )
+            bar_labels.append(
+                f'<span style="font-size:0.7em;color:#6b7280;">'
+                f'{pct}% {_pol_labels[pol]}</span>'
+            )
+
+        # Skip polarity bar for "Other" — unclassified sentences aren't necessarily related
+        if topic == "Other":
+            polarity_bar = ""
+        else:
+            polarity_bar = (
+                f'<div style="display:flex;align-items:center;gap:6px;margin-left:8px;">'
+                f'<div style="display:flex;width:80px;height:6px;border-radius:3px;overflow:hidden;'
+                f'background:#f3f4f6;flex-shrink:0;">'
+                + "".join(bar_segments)
+                + '</div>'
+                + " ".join(bar_labels)
+                + '</div>'
+            )
+
+        # --- Header (polarity bar inline after reviewer count) ---
+        header = (
+            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+            f'<span style="font-weight:600;font-size:0.88em;color:#1f2937;">{_html.escape(topic)}</span>'
+            f'<span style="color:#9ca3af;font-size:0.75em;">·</span>'
+            f'<span style="font-size:0.75em;color:#6b7280;">{reviewer_text}</span>'
+            f'{polarity_bar}'
+            f'</div>'
+        )
+
+        # --- Polarity sub-groups ---
+        sub_groups_html = []
+        for pol in _pol_order:
+            if pol not in pol_dict:
+                continue
+            rev_dict = pol_dict[pol]
+            cnt = pol_counts.get(pol, 0)
+            color = _pol_colors[pol]
+
+            sub_header = (
+                f'<div style="font-size:0.78em;font-weight:600;color:{color};'
+                f'margin:4px 0 2px 0;">'
+                f'{_pol_labels[pol]} ({cnt} sentence{"s" if cnt != 1 else ""})</div>'
+            )
+
+            rows = []
+            for r_idx in sorted(rev_dict.keys()):
+                best = _pick_best(rev_dict[r_idx], r_idx)
+                rows.append(_sent_row(best, r_idx))
+
+            sub_groups_html.append(sub_header + "".join(rows))
+
+        cards.append(
+            f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
+            f'border-radius:6px;padding:8px 12px;margin-bottom:5px;">'
+            f'{header}{"".join(sub_groups_html)}'
+            f'</div>'
+        )
+
+    inner = "".join(cards)
+    return (
+        f'<details open style="margin-bottom:10px;border:1px solid #d1d5db;border-radius:8px;'
+        f'padding:0;overflow:hidden;">'
+        f'<summary style="cursor:pointer;font-weight:700;font-size:0.92em;color:#1f2937;'
+        f'padding:10px 14px;list-style:none;background:#f9fafb;border-bottom:1px solid #e5e7eb;'
+        f'user-select:none;display:flex;align-items:center;gap:6px;">'
+        f'<span class="collapse-arrow" style="display:inline-block;transition:transform 0.2s;'
+        f'font-size:0.75em;">&#9660;</span>'
+        f'Common Themes Across Reviews</summary>'
+        f'<div style="padding:8px 10px;">{inner}</div>'
+        f'</details>'
+    )
+
+
 def format_divergent_cards(
     uniqueness: dict,
     sentence_lists: list,
@@ -454,15 +740,23 @@ def render_agreement_html(
     parts = []
     if wrap:
         parts.append(
-            '<details open class="review-collapse" style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
+            '<details open class="review-collapse" style="border:1px solid #d1d5db;border-radius:8px;'
+            'padding:0;margin-bottom:10px;overflow:hidden;">'
             f'<summary style="font-weight:600;font-size:0.85em;color:#374151;cursor:pointer;'
-            f'list-style:none;display:flex;align-items:center;gap:6px;">'
-            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+            f'list-style:none;display:flex;align-items:center;gap:6px;'
+            f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
+            f'<span style="transition:transform 0.2s;font-size:0.7em;">▼</span> '
             f'{_html.escape(label)}</summary>'
+            '<div style="padding:12px 16px;">'
         )
     else:
         if label:
-            parts.append(f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>')
+            parts.append(
+                f'<div style="border:1px solid #d1d5db;border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
+                f'<div style="background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;'
+                f'font-weight:600;font-size:0.85em;color:#374151;">{_html.escape(label)}</div>'
+                f'<div style="padding:12px 16px;">'
+            )
     parts.append(legend_html)
     parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
 
@@ -546,9 +840,13 @@ def render_agreement_html(
             f'</span>'
         )
 
-    parts.append("</div>")
+    parts.append("</div>")  # close sentence container
     if wrap:
+        parts.append("</div>")  # close inner padding div
         parts.append("</details>")
+    elif label:
+        parts.append("</div>")  # close inner padding div
+        parts.append("</div>")  # close outer border div
     return "".join(parts)
 
 
@@ -1009,44 +1307,21 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
         listener = rsa_result.get("listener", {}) if rsa_result else {}
         speaker = rsa_result.get("speaker", {}) if rsa_result else {}
 
-        # --- Most Common hub ---
+        # --- Common Themes (topic+polarity grouping) ---
+        polarity_map = rsa_state.get("polarity_map", {})
+        topic_map = rsa_state.get("topic_map", {})
+
+        most_common_text = format_common_themes(
+            sentence_lists, polarity_map, topic_map,
+            speaker=speaker, uniqueness=uniqueness, listener=listener,
+        )
+
+        # --- Most Divergent hub (per-review) ---
         if uniqueness:
-            import pandas as _pd
-            scores_series = _pd.Series(uniqueness)
-
-            # Step 1: Take the 15 most common sentences by raw uniqueness score.
-            # The RSA math is authoritative here — trust the ranking it produces.
-            n_seed = min(15, len(scores_series))
-            seed = scores_series.nsmallest(n_seed).index.tolist()
-
-            # Step 2: Re-rank by listener ENTROPY — sentences with balanced
-            # distributions across reviewers (high entropy) are genuinely "common".
-            # This naturally surfaces R1 63% / R2 33% / R3 4% above R1 86% / R2 7% / R3 7%
-            # because entropy rewards spread, not concentration.
-            # Informativeness (max speaker) is wrong here — it rewards single-reviewer
-            # dominance, which is the opposite of "common".
-            if listener:
-                def _listener_entropy(sent):
-                    dist = listener.get(sent, {})
-                    ent = 0.0
-                    for p in dist.values():
-                        if p > 0:
-                            ent -= p * math.log(p)
-                    return ent
-                seed.sort(key=_listener_entropy, reverse=True)
-
-            # Step 3: Show top 5 (highest entropy = most balanced = best common).
-            top_common = seed[:5]
-            most_common_text = format_summary_cards(
-                top_common, uniqueness, sentence_lists, "common",
-                listener=listener, speaker=speaker,
-            )
-            # --- Most Divergent hub (per-review) ---
             divergent_per_review = format_divergent_cards(
                 uniqueness, sentence_lists, listener, speaker,
             )
         else:
-            most_common_text = ""
             divergent_per_review = {}
 
         progress(0.90, desc="Formatting agreement results...")
@@ -1250,6 +1525,27 @@ with gr.Blocks(
                 review_sentence_lists.append([s for s, _ in review_item])
                 review_items_cache.append((review_item, rebuttal_html))
 
+            # Build polarity/topic dicts from pre-processed metadata
+            # (same format as interactive tab, for consistent Common Themes rendering)
+            prep_polarity_map = {}
+            prep_topic_map = {}
+            for review_data in current_review:
+                if isinstance(review_data, dict) and "sentences" in review_data:
+                    items = review_data["sentences"].items()
+                else:
+                    items = review_data.items() if isinstance(review_data, dict) else []
+                for sent, meta in items:
+                    if not isinstance(meta, dict):
+                        continue
+                    pol_val = meta.get("polarity")
+                    if pol_val == 0:
+                        prep_polarity_map[sent] = "➖"
+                    elif pol_val == 2:
+                        prep_polarity_map[sent] = "➕"
+                    topic = meta.get("topic")
+                    if topic and topic != "NONE":
+                        prep_topic_map[sent] = topic
+
             # For agreement mode, build uniqueness dict and extract RSA distributions
             # RSA listener/speaker come from metadata (if pipeline saved them)
             prep_listener = None
@@ -1326,13 +1622,14 @@ with gr.Blocks(
 
                     # Wrap review content + rebuttal in a single collapsible card
                     html_content = (
-                        '<details open class="review-collapse" style="border:1px solid #e5e7eb;'
-                        'border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
+                        '<details open class="review-collapse" style="border:1px solid #d1d5db;'
+                        'border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
                         f'<summary style="font-weight:600;font-size:0.9em;color:#374151;cursor:pointer;'
-                        f'list-style:none;display:flex;align-items:center;gap:6px;">'
-                        f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+                        f'list-style:none;display:flex;align-items:center;gap:6px;'
+                        f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
+                        f'<span style="transition:transform 0.2s;font-size:0.7em;">▼</span> '
                         f'{_html.escape(review_label)}</summary>'
-                        f'{inner_html}{rebuttal_html}'
+                        f'<div style="padding:12px 16px;">{inner_html}{rebuttal_html}</div>'
                         '</details>'
                     )
 
@@ -1355,31 +1652,12 @@ with gr.Blocks(
             # General rebuttal display (currently unused in new format, kept for backward compat)
             general_rebuttal_update = gr.update(visible=False, value="")
 
-            # Set most common opinions (as HTML cards with context)
-            # Uses entropy-based ranking when listener data is available (like interactive tab)
-            if show_consensuality and consensuality_dict:
-                scores = pd.Series(consensuality_dict)
-
-                if prep_listener:
-                    # Entropy-based ranking: same logic as interactive tab
-                    n_seed = min(15, len(scores))
-                    seed = scores.nsmallest(n_seed).index.tolist()
-
-                    def _listener_entropy(sent):
-                        dist = prep_listener.get(sent, {})
-                        ent = 0.0
-                        for p in dist.values():
-                            if p > 0:
-                                ent -= p * math.log(p)
-                        return ent
-                    seed.sort(key=_listener_entropy, reverse=True)
-                    most_common = seed[:5]
-                else:
-                    most_common = scores.sort_values(ascending=True).head(5).index.tolist()
-
-                most_common_html = format_summary_cards(
-                    most_common, consensuality_dict, review_sentence_lists, "common",
-                    listener=prep_listener, speaker=prep_speaker,
+            # Common Themes (topic+polarity grouping) — consistent with interactive tab
+            if show_consensuality:
+                most_common_html = format_common_themes(
+                    review_sentence_lists, prep_polarity_map, prep_topic_map,
+                    speaker=prep_speaker, uniqueness=consensuality_dict if consensuality_dict else None,
+                    listener=prep_listener,
                 )
 
                 most_common_visibility = gr.update(visible=True, value=most_common_html)
