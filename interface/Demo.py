@@ -1,7 +1,9 @@
 import sys, os.path
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List, Optional
+import hashlib
 import json
+import math
 import torch
 import gradio as gr
 import pandas as pd
@@ -21,62 +23,117 @@ AGREEMENT_AMP_COMMON = 0.65  # exponent for negative scores (blue = common)
 
 import html as _html
 
+def _make_sentence_id(sentence: str) -> str:
+    """Deterministic DOM ID for a sentence, used by click-to-scroll."""
+    return "sent_" + hashlib.md5(sentence.encode("utf-8")).hexdigest()[:12]
+
+
+def _get_context(sentence: str, sentence_lists: list):
+    """Return (context_before, context_after) strings for the first review containing sentence."""
+    for sl in sentence_lists:
+        if sentence in sl:
+            idx = sl.index(sentence)
+            before = _html.escape(sl[idx - 1]) if idx > 0 else ""
+            after = _html.escape(sl[idx + 1]) if idx < len(sl) - 1 else ""
+            return before, after
+    return "", ""
+
+
 def format_summary_cards(
     sentences: list,
     scores: dict,
     sentence_lists: list,
     card_type: str = "common",
+    listener: dict = None,
+    speaker: dict = None,
 ) -> str:
     """
-    Generate styled HTML cards for the Most Common / Most Divergent summary boxes.
+    Most Common Opinions hub.
 
-    Args:
-        sentences: Top N sentence strings to display.
-        scores: Full {sentence: score} dict for badge coloring.
-        sentence_lists: Per-review sentence lists (for attribution & context).
-        card_type: "common" (blue) or "unique" (red).
+    Selection: When listener/speaker data is available, re-ranks candidates by
+    informativeness × (1 − normalized_uniqueness) so substantive agreements
+    surface above generic filler. Falls back to the raw score order when the
+    full RSA data is not available (pre-processed tab).
+
+    Each card shows:
+    - L_t(d|s) distribution bars (R1 40% · R2 45% · R3 15%) when data is available
+    - Context snippet (1 sentence before / after)
+    - Clickable to scroll to the sentence in the full review below
     """
     if not sentences:
         return ""
 
-    border_color = "#93c5fd" if card_type == "common" else "#fca5a5"
-    badge_bg = "#dbeafe" if card_type == "common" else "#fee2e2"
-    badge_fg = "#1e40af" if card_type == "common" else "#991b1b"
-    title = "Most Common Opinions" if card_type == "common" else "Most Divergent Opinions"
+    border_color = "#93c5fd"
+    badge_bg = "#dbeafe"
+    badge_fg = "#1e40af"
+
+    # --- Re-rank by informativeness when full RSA data is available ---
+    if speaker and listener:
+        num_reviews = len(speaker)
+        # Compute composite score: informativeness * (1 - abs(normalized_uniqueness))
+        def composite(s):
+            info = compute_informativeness(s, speaker, num_reviews)
+            u = abs(scores.get(s, 0.0))
+            return info * (1.0 - u)
+        sentences = sorted(sentences, key=composite, reverse=True)
 
     cards_html = (
-        f'<div style="margin-bottom:4px;font-weight:600;font-size:0.9em;color:#374151;">{title}</div>'
+        '<div style="margin-bottom:6px;font-weight:600;font-size:0.9em;color:#374151;">'
+        'Most Common Opinions</div>'
     )
 
     for sent in sentences:
-        # Find which reviews contain this sentence
-        review_badges = []
-        context_before, context_after = "", ""
-        for r_idx, sl in enumerate(sentence_lists):
-            if sent in sl:
-                review_badges.append(r_idx + 1)
-                # Get 1 sentence before and after for context (from first matching review)
-                if not context_before and not context_after:
-                    s_idx = sl.index(sent)
-                    if s_idx > 0:
-                        context_before = _html.escape(sl[s_idx - 1])
-                    if s_idx < len(sl) - 1:
-                        context_after = _html.escape(sl[s_idx + 1])
-
-        badges = " ".join(
-            f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 8px;'
-            f'border-radius:4px;font-size:0.72em;font-weight:600;">Review {n}</span>'
-            for n in review_badges
-        )
-
-        ctx_style = 'color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;'
+        sent_id = _make_sentence_id(sent)
+        context_before, context_after = _get_context(sent, sentence_lists)
+        ctx_style = "color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;"
         before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
         after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
 
+        # --- L_t(d|s) distribution bars ---
+        dist_html = ""
+        if listener and sent in listener:
+            dist = listener[sent]
+            bar_parts = []
+            for label, prob in sorted(dist.items()):
+                pct = int(round(prob * 100))
+                bar_w = max(2, int(prob * 80))  # max bar width 80px
+                bar_parts.append(
+                    f'<span style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;">'
+                    f'<span style="font-size:0.72em;font-weight:600;color:{badge_fg};">{label}</span>'
+                    f'<span style="display:inline-block;width:{bar_w}px;height:6px;'
+                    f'background:#3b82f6;border-radius:3px;"></span>'
+                    f'<span style="font-size:0.72em;color:#6b7280;">{pct}%</span>'
+                    f'</span>'
+                )
+            dist_html = (
+                f'<div style="display:flex;flex-wrap:wrap;margin-bottom:5px;">'
+                + "".join(bar_parts)
+                + "</div>"
+            )
+        else:
+            # Fallback: plain review badges
+            review_badges = [
+                r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl
+            ]
+            dist_html = '<div style="display:flex;gap:6px;margin-bottom:6px;">' + " ".join(
+                f'<span style="background:{badge_bg};color:{badge_fg};padding:2px 8px;'
+                f'border-radius:4px;font-size:0.72em;font-weight:600;">Review {n}</span>'
+                for n in review_badges
+            ) + "</div>"
+
+        # Click-to-scroll via inline JS
+        onclick = (
+            f"(function(){{var el=document.getElementById('{sent_id}');"
+            f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+            f"el.style.outline='3px solid #3b82f6';"
+            f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
+        )
+
         cards_html += (
             f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-            f'border-radius:6px;padding:10px 14px;margin-bottom:6px;">'
-            f'<div style="display:flex;gap:6px;margin-bottom:6px;">{badges}</div>'
+            f'border-radius:6px;padding:10px 14px;margin-bottom:6px;cursor:pointer;" '
+            f'onclick="{_html.escape(onclick)}">'
+            f'{dist_html}'
             f'{before_html}'
             f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
             f'{after_html}'
@@ -84,6 +141,197 @@ def format_summary_cards(
         )
 
     return cards_html
+
+
+def format_divergent_cards(
+    uniqueness: dict,
+    sentence_lists: list,
+    listener: dict,
+    speaker: dict,
+) -> str:
+    """
+    Most Divergent Opinions hub — grouped by reviewer.
+
+    For each review, finds the sentences where argmax(L_t(d|s)) points to that
+    review (i.e., the listener assigns it most strongly to that reviewer) AND
+    the uniqueness score is above the median. Ranks within each reviewer's set
+    by their Speaker score S_t(s|d) (how characteristic of that reviewer).
+    Shows the top 2 per reviewer.
+    """
+    if not uniqueness or not listener or not speaker:
+        return ""
+
+    import numpy as np
+    num_reviews = len(speaker)
+    if num_reviews == 0:
+        return ""
+
+    median_u = float(np.median(list(uniqueness.values())))
+    review_labels = [f"R{i+1}" for i in range(num_reviews)]
+
+    # Group sentences by their argmax review
+    grouped: dict = {label: [] for label in review_labels}
+    for sent, u_score in uniqueness.items():
+        if u_score <= median_u:
+            continue  # only unique sentences
+        if sent not in listener:
+            continue
+        dist = listener[sent]
+        if not dist:
+            continue
+        argmax_label = max(dist, key=lambda k: dist[k])
+        if argmax_label in grouped:
+            # Score = speaker probability for this review
+            s_score = speaker.get(argmax_label, {}).get(sent, 0.0)
+            grouped[argmax_label].append((sent, u_score, s_score))
+
+    # Sort each group by speaker score descending and take top 2
+    for label in review_labels:
+        grouped[label].sort(key=lambda x: x[2], reverse=True)
+        grouped[label] = grouped[label][:2]
+
+    # Only render groups that have at least 1 sentence
+    non_empty = [(label, items) for label, items in grouped.items() if items]
+    if not non_empty:
+        return ""
+
+    border_color = "#fca5a5"
+    html_parts = [
+        '<div style="margin-bottom:6px;font-weight:600;font-size:0.9em;color:#374151;">'
+        'Most Divergent Opinions</div>'
+    ]
+
+    for label, items in non_empty:
+        # Reviewer section heading
+        r_num = label[1:]  # "R1" → "1"
+        html_parts.append(
+            f'<div style="font-size:0.8em;font-weight:600;color:#7f1d1d;'
+            f'margin:8px 0 4px 0;">Reviewer {r_num}\'s Unique Points</div>'
+        )
+        for sent, u_score, _ in items:
+            sent_id = _make_sentence_id(sent)
+            context_before, context_after = _get_context(sent, sentence_lists)
+            ctx_style = "color:#9ca3af;font-size:0.8em;line-height:1.4;font-style:italic;"
+            before_html = f'<div style="{ctx_style}">...{context_before}</div>' if context_before else ""
+            after_html = f'<div style="{ctx_style}">{context_after}...</div>' if context_after else ""
+
+            pct = int(round(min(u_score * 100, 100)))
+            uniqueness_badge = (
+                f'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;'
+                f'border-radius:4px;font-size:0.72em;font-weight:600;margin-bottom:5px;display:inline-block;">'
+                f'Uniqueness {pct}%</span>'
+            )
+
+            onclick = (
+                f"(function(){{var el=document.getElementById('{sent_id}');"
+                f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+                f"el.style.outline='3px solid #ef4444';"
+                f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
+            )
+
+            html_parts.append(
+                f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
+                f'border-radius:6px;padding:10px 14px;margin-bottom:6px;cursor:pointer;" '
+                f'onclick="{_html.escape(onclick)}">'
+                f'{uniqueness_badge}'
+                f'{before_html}'
+                f'<div style="color:#111827;line-height:1.5;padding:2px 0;">{_html.escape(sent)}</div>'
+                f'{after_html}'
+                f'</div>'
+            )
+
+    return "".join(html_parts)
+
+
+def render_agreement_html(
+    sentences: List[str],
+    uniqueness: Dict[str, float],
+    listener: Dict[str, Dict[str, float]],
+    speaker: Dict[str, Dict[str, float]],
+    num_reviews: int,
+    label: str = "Agreement",
+) -> str:
+    """
+    Custom HTML renderer for Agreement mode (replaces gr.HighlightedText).
+
+    Each sentence gets:
+    - Continuous opacity from score magnitude (strongest opinions most vivid)
+    - CSS hover tooltip showing L_t(d|s): "Applies to: R1 (40%) · R2 (45%)"
+    - Informativeness dimming for generic common filler
+    - Sentence ID for click-to-scroll from summary cards
+    """
+    if not sentences:
+        return ""
+
+    # Color scale legend bar
+    legend_html = (
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;'
+        'font-size:0.75em;color:#6b7280;">'
+        '<span style="background:linear-gradient(to right,rgba(59,130,246,0.7),rgba(209,213,219,0.3),rgba(239,68,68,0.7));'
+        'width:120px;height:8px;border-radius:4px;display:inline-block;"></span>'
+        '<span>← Common &nbsp;|&nbsp; Unique →</span>'
+        '</div>'
+    )
+
+    parts = [f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>']
+    parts.append(legend_html)
+    parts.append('<div style="line-height:1.8;font-size:0.95em;">')
+
+    # Compute informativeness threshold: 2 / K (twice uniform baseline)
+    k = max(len(uniqueness), 1)
+    info_threshold = 2.0 / k
+
+    for sent in sentences:
+        sent_id = _make_sentence_id(sent)
+        score = uniqueness.get(sent)
+
+        if score is None or abs(score) < HIGHLIGHT_THRESHOLD:
+            # No highlight
+            parts.append(f'<span id="{sent_id}">{_html.escape(sent)} </span>')
+            continue
+
+        # --- Color and opacity ---
+        if score < 0:
+            # Common: blue
+            exp = AGREEMENT_AMP_COMMON
+            r, g, b = 59, 130, 246
+        else:
+            # Unique: red
+            exp = AGREEMENT_AMP_UNIQUE
+            r, g, b = 239, 68, 68
+
+        opacity = abs(score) ** exp
+
+        # --- Informativeness dimming for common sentences ---
+        if score < 0 and speaker:
+            info = compute_informativeness(sent, speaker, num_reviews)
+            if info < info_threshold:
+                # Dim generic filler to 30% of normal opacity
+                opacity *= 0.3
+
+        bg_color = f"rgba({r},{g},{b},{opacity:.3f})"
+
+        # --- Tooltip content from L_t(d|s) ---
+        tooltip_text = ""
+        if listener and sent in listener:
+            dist = listener[sent]
+            parts_tooltip = " · ".join(
+                f"{lbl} {int(round(p * 100))}%"
+                for lbl, p in sorted(dist.items())
+            )
+            tooltip_text = f"Applies to: {parts_tooltip}"
+        else:
+            tooltip_text = f"Score: {score:+.2f}"
+
+        parts.append(
+            f'<span id="{sent_id}" class="rsa-sentence" style="background:{bg_color};">'
+            f'{_html.escape(sent)} '
+            f'<span class="rsa-tooltip">{_html.escape(tooltip_text)}</span>'
+            f'</span>'
+        )
+
+    parts.append("</div>")
+    return "".join(parts)
 
 
 # Auto-detect the preprocessed dataset CSV
@@ -260,7 +508,7 @@ def _status_html(msg, kind="success"):
 from interface.interactive_processor import InteractiveReviewProcessor
 from dependencies.sentence_filter import (
     is_noise_sentence, filter_and_clean_sentences, strip_header_prefix,
-    HIGHLIGHT_THRESHOLD,
+    HIGHLIGHT_THRESHOLD, compute_informativeness,
 )
 _interactive_processor = None
 
@@ -478,13 +726,13 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
         if i < len(sentence_lists):
             # No Highlighting mode: show original text without any highlighting
             none_out.append(gr.update(visible=True, value=fmt(sentence_lists[i], {}, "none")))
-            # Agreement section shows "Computing..." placeholder
-            agree_out.append(gr.update(visible=False, value=[("⏳ Computing agreement...", None)]))
+            # Agreement section shows empty placeholder (RSA fills in async)
+            agree_out.append(gr.update(visible=False, value=""))
             polar_out.append(gr.update(visible=False, value=fmt(sentence_lists[i], polarity_map, "polarity")))
             topic_out.append(gr.update(visible=False, value=fmt(sentence_lists[i], topic_map, "topic")))
         else:
             none_out.append(gr.update(visible=False, value=None))
-            agree_out.append(gr.update(visible=False, value=None))
+            agree_out.append(gr.update(visible=False, value=""))
             polar_out.append(gr.update(visible=False, value=None))
             topic_out.append(gr.update(visible=False, value=None))
 
@@ -512,10 +760,10 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
 def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.Progress()) -> Tuple:
     """
     Compute RSA (agreement) in background.
-    Returns updates for agreement sections only.
+    Returns updates for agreement HTML sections + summary cards.
     """
     if not rsa_state or not rsa_state.get("sentence_lists"):
-        return tuple([gr.update(visible=False, value=None)] * (MAX_INTERACTIVE_REVIEWS + 2))
+        return tuple([gr.update(visible=False, value="") ] * (MAX_INTERACTIVE_REVIEWS + 2))
 
     progress(0.0, desc="Computing agreement (this may take a minute)...")
 
@@ -524,40 +772,48 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
     active_texts = rsa_state["active_texts"]
 
     try:
-        # Compute consensuality
+        # Full RSA computation — exposes listener, speaker, best_rsa alongside uniqueness
         progress(0.50, desc="Running RSA reranking...")
-        consensuality_map = processor.predict_consensuality(*active_texts)
+        rsa_result = processor.predict_rsa_full(*active_texts)
 
-        # Build summary cards with review attribution and context
-        if consensuality_map:
+        uniqueness = rsa_result.get("uniqueness", {}) if rsa_result else {}
+        listener = rsa_result.get("listener", {}) if rsa_result else {}
+        speaker = rsa_result.get("speaker", {}) if rsa_result else {}
+
+        # --- Most Common hub (smart ranking by informativeness × (1 − uniqueness)) ---
+        if uniqueness:
             import pandas as _pd
-            scores_series = _pd.Series(consensuality_map)
-            top_common = scores_series.nsmallest(3).index.tolist()
-            top_unique = scores_series.nlargest(3).index.tolist()
-            most_common_text = format_summary_cards(top_common, consensuality_map, sentence_lists, "common")
-            most_unique_text = format_summary_cards(top_unique, consensuality_map, sentence_lists, "unique")
+            scores_series = _pd.Series(uniqueness)
+            # Seed list: bottom half by uniqueness (most common sentences)
+            median_u = float(scores_series.median())
+            common_candidates = scores_series[scores_series <= median_u].nsmallest(10).index.tolist()
+            most_common_text = format_summary_cards(
+                common_candidates, uniqueness, sentence_lists, "common",
+                listener=listener, speaker=speaker,
+            )
+            # --- Most Divergent hub (grouped by reviewer) ---
+            most_unique_text = format_divergent_cards(
+                uniqueness, sentence_lists, listener, speaker,
+            )
         else:
             most_common_text = ""
             most_unique_text = ""
 
-        # Amplify scores for visible highlighting: sign-preserving power transform
-        # Maps [-1,1] → [-1,1] but pushes values away from 0 for better color contrast
-        import math
-        amplified_map = {
-            s: math.copysign(abs(v) ** (AGREEMENT_AMP_UNIQUE if v > 0 else AGREEMENT_AMP_COMMON), v) if v != 0 else 0.0
-            for s, v in consensuality_map.items()
-        }
-
         progress(0.90, desc="Formatting agreement results...")
 
-        fmt = processor.format_highlighted_output
         show_agreement = current_focus in ("Agreement", "Agreement (Processing)")
+        num_reviews = len(active_texts)
         agree_out = []
         for i in range(MAX_INTERACTIVE_REVIEWS):
             if i < len(sentence_lists):
-                agree_out.append(gr.update(visible=show_agreement, value=fmt(sentence_lists[i], amplified_map, "consensuality")))
+                html_val = render_agreement_html(
+                    sentence_lists[i], uniqueness, listener, speaker,
+                    num_reviews=num_reviews,
+                    label=f"Agreement in Review {i + 1}",
+                )
+                agree_out.append(gr.update(visible=show_agreement, value=html_val))
             else:
-                agree_out.append(gr.update(visible=False, value=None))
+                agree_out.append(gr.update(visible=False, value=""))
 
         progress(1.0, desc="Agreement computation complete!")
 
@@ -566,7 +822,7 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.P
     except Exception as e:
         print(f"[RSA ERROR] {type(e).__name__}: {str(e)}")
         error_msg = f"❌ Agreement computation failed: {str(e)[:100]}"
-        return tuple([gr.update(visible=False, value=None)] * MAX_INTERACTIVE_REVIEWS + [error_msg, ""])
+        return tuple([gr.update(visible=False, value="")] * MAX_INTERACTIVE_REVIEWS + [error_msg, ""])
 
 
 
@@ -583,6 +839,35 @@ CUSTOM_CSS = """
     border-left: 4px solid #f59e0b;
     padding-left: 10px;
     margin-top: 16px;
+}
+
+/* RSA sentence tooltip styles */
+.rsa-sentence {
+    position: relative;
+    cursor: help;
+    padding: 1px 3px;
+    border-radius: 2px;
+    display: inline;
+}
+.rsa-tooltip {
+    visibility: hidden;
+    position: absolute;
+    bottom: 125%;
+    left: 0;
+    background: #1f2937;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.78em;
+    white-space: nowrap;
+    z-index: 100;
+    pointer-events: none;
+    max-width: 320px;
+    white-space: normal;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.rsa-sentence:hover .rsa-tooltip {
+    visibility: visible;
 }
 """
 
@@ -995,42 +1280,42 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
 
             # Review 1 (all display modes + rebuttal)
             none_text1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=True, value=None)
-            agreement_text1 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 1", visible=False, value=None)
+            agreement_text1 = gr.HTML(visible=False, value="")
             polarity_text1 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 1", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text1 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 1", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review1 = gr.HTML(visible=False, value="")
 
             # Review 2 (all display modes + rebuttal)
             none_text2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=False, value=None)
-            agreement_text2 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 2", visible=False, value=None)
+            agreement_text2 = gr.HTML(visible=False, value="")
             polarity_text2 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 2", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text2 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 2", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review2 = gr.HTML(visible=False, value="")
 
             # Review 3 (all display modes + rebuttal)
             none_text3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=False, value=None)
-            agreement_text3 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 3", visible=False, value=None)
+            agreement_text3 = gr.HTML(visible=False, value="")
             polarity_text3 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 3", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text3 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 3", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review3 = gr.HTML(visible=False, value="")
 
             # Review 4 (all display modes + rebuttal)
             none_text4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=False, value=None)
-            agreement_text4 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 4", visible=False, value=None)
+            agreement_text4 = gr.HTML(visible=False, value="")
             polarity_text4 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 4", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text4 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 4", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review4 = gr.HTML(visible=False, value="")
 
             # Review 5 (all display modes + rebuttal)
             none_text5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=False, value=None)
-            agreement_text5 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 5", visible=False, value=None)
+            agreement_text5 = gr.HTML(visible=False, value="")
             polarity_text5 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 5", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text5 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 5", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review5 = gr.HTML(visible=False, value="")
 
             # Review 6 (all display modes + rebuttal)
             none_text6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=False, value=None)
-            agreement_text6 = gr.HighlightedText(show_legend=True, label="Agreement in 📝 Review 6", visible=False, value=None)
+            agreement_text6 = gr.HTML(visible=False, value="")
             polarity_text6 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 6", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text6 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 6", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review6 = gr.HTML(visible=False, value="")
@@ -1203,7 +1488,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 "",                                              # clear paste_rebuttal
                 3,                                               # reset count
                 "", "",                                          # clear most common/divergent
-                *([None] * 6), *([None] * 6), *([None] * 6), *([None] * 6),   # clear all output panels (none, agree, polar, topic)
+                *([None] * 6), *([" "] * 6), *([None] * 6), *([None] * 6),   # clear all output panels (none, agree, polar, topic)
                 {},                                              # reset rsa_computation_state
             ),
             inputs=[],

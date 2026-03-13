@@ -159,6 +159,33 @@ def detect_references_start(sentences: List[str]) -> Optional[int]:
     return None
 
 
+def compute_informativeness(sentence: str, speaker: dict, num_reviews: int) -> float:
+    """
+    Compute the informativeness of a sentence using the Speaker distribution S_t(s|d).
+
+    Returns max_d( S_t(s|d) ) — the maximum speaker probability across all reviews.
+    High value means at least one review "claims" this sentence strongly (informative).
+    Low value means no review claims it above random chance (generic filler).
+
+    Args:
+        sentence: The sentence to evaluate.
+        speaker: {R1: {sentence: prob}, R2: {sentence: prob}, ...}
+        num_reviews: Number of reviews (used to check R1..Rn labels).
+
+    Returns:
+        Float in [0, 1]. Uniform baseline is 1/K where K = number of candidates.
+    """
+    if not speaker or not sentence:
+        return 0.0
+    max_score = 0.0
+    for i in range(num_reviews):
+        label = f"R{i + 1}"
+        score = speaker.get(label, {}).get(sentence, 0.0)
+        if score > max_score:
+            max_score = score
+    return max_score
+
+
 def filter_and_clean_sentences(sentences: List[str]) -> List[str]:
     """
     Full filtering pipeline: truncate at references, strip header prefixes,

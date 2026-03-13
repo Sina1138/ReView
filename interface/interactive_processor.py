@@ -195,6 +195,93 @@ class InteractiveReviewProcessor:
 
         return dict(scores)
 
+    def predict_rsa_full(
+        self,
+        *texts: str,
+        rationality: float = 1.0,
+        iterations: int = 1
+    ) -> Dict:
+        """
+        Full RSA computation exposing all GLIMPSE math variables.
+
+        Returns a dict with:
+          uniqueness  — {sentence: normalized_score in [-1,1]}  (same as predict_consensuality)
+          listener    — {sentence: {R1: prob, R2: prob, ...}}    L_t(d|s) distribution
+          speaker     — {R1: {sentence: prob}, ...}              S_t(s|d) distribution
+          best_rsa    — {R1: sentence, R2: sentence, ...}        most characteristic sentence per review
+        """
+        import numpy as np
+
+        texts = [t for t in texts if t and t.strip()]
+        if len(texts) < 2:
+            return {}
+
+        all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
+        unique_sentences = list(set(s for lst in all_sentence_lists for s in lst))
+        sentences = filter_and_clean_sentences(unique_sentences)
+
+        if not sentences:
+            return {}
+
+        rsa_reranker = RSAReranking(
+            self.rsa_model,
+            self.rsa_tokenizer,
+            candidates=sentences,
+            source_texts=list(texts),
+            device=str(self.device),
+            rationality=rationality,
+        )
+
+        best_rsa_arr, _, speaker_df, listener_df, _, _, _, consensuality_scores = \
+            rsa_reranker.rerank(t=iterations)
+
+        # --- Normalize uniqueness scores (identical to predict_consensuality) ---
+        scores = consensuality_scores.copy()
+        vals = scores.values
+        median = np.median(vals)
+        q25, q75 = np.percentile(vals, 25), np.percentile(vals, 75)
+        iqr = q75 - q25
+        if iqr > 0:
+            scores = ((scores - median) / (iqr * 2)).clip(-1, 1)
+        else:
+            scores = scores * 0
+        uniqueness = {s: float(v) for s, v in scores.items()}
+
+        # --- Listener distribution L_t(d|s): exponentiate log-probs, normalize per column ---
+        # listener_df shape: (N_reviews, K_sentences), values are log-probs
+        listener_probs = np.exp(listener_df.values)  # (N, K)
+        # Normalize columns so they sum to 1 per sentence
+        col_sums = listener_probs.sum(axis=0, keepdims=True)
+        col_sums = np.where(col_sums > 0, col_sums, 1.0)
+        listener_probs = listener_probs / col_sums
+        review_labels = [f"R{i+1}" for i in range(len(texts))]
+        listener = {
+            sent: {review_labels[i]: float(listener_probs[i, j]) for i in range(len(texts))}
+            for j, sent in enumerate(listener_df.columns)
+        }
+
+        # --- Speaker distribution S_t(s|d): exponentiate log-probs, normalize per row ---
+        # speaker_df shape: (N_reviews, K_sentences), values are log-probs
+        speaker_probs = np.exp(speaker_df.values)  # (N, K)
+        # Normalize rows so they sum to 1 per review
+        row_sums = speaker_probs.sum(axis=1, keepdims=True)
+        row_sums = np.where(row_sums > 0, row_sums, 1.0)
+        speaker_probs = speaker_probs / row_sums
+        speaker = {
+            review_labels[i]: {sent: float(speaker_probs[i, j]) for j, sent in enumerate(speaker_df.columns)}
+            for i in range(len(texts))
+        }
+
+        # --- best_rsa: most characteristic sentence per review ---
+        best_rsa = {review_labels[i]: str(best_rsa_arr[i]) for i in range(len(best_rsa_arr))}
+
+        return {
+            "uniqueness": uniqueness,
+            "listener": listener,
+            "speaker": speaker,
+            "best_rsa": best_rsa,
+        }
+
     def format_highlighted_output(
         self,
         sentences: List[str],
