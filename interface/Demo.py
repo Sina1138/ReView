@@ -123,6 +123,33 @@ _TOPIC_HTML_COLORS = {
 }
 
 
+def _wrap_review_card(label: str, inner_html: str, collapsible: bool = True) -> str:
+    """Wrap review content in a styled card with gray header. Single source of truth for review card styling."""
+    escaped = _html.escape(label) if label else ""
+    if collapsible:
+        return (
+            f'<details open class="review-collapse" style="border:1px solid #d1d5db;'
+            f'border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
+            f'<summary style="font-weight:600;font-size:0.9em;color:#374151;cursor:pointer;'
+            f'list-style:none;display:flex;align-items:center;gap:6px;'
+            f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
+            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+            f'{escaped}</summary>'
+            f'<div style="padding:12px 16px;">{inner_html}</div>'
+            f'</details>'
+        )
+    else:
+        if not label:
+            return inner_html
+        return (
+            f'<div style="border:1px solid #d1d5db;border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
+            f'<div style="background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;'
+            f'font-weight:600;font-size:0.85em;color:#374151;">{escaped}</div>'
+            f'<div style="padding:12px 16px;">{inner_html}</div>'
+            f'</div>'
+        )
+
+
 def render_review_html(
     review_items: list,
     mode: str = "plain",
@@ -142,17 +169,6 @@ def render_review_html(
         return ""
 
     parts = []
-    if wrap:
-        parts.append(
-            '<details open class="review-collapse" style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
-            f'<summary style="font-weight:600;font-size:0.85em;color:#374151;cursor:pointer;'
-            f'list-style:none;display:flex;align-items:center;gap:6px;">'
-            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
-            f'{_html.escape(label)}</summary>'
-        )
-    else:
-        if label:
-            parts.append(f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>')
     parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
 
     for i, (sent, metadata) in enumerate(review_items):
@@ -192,9 +208,12 @@ def render_review_html(
             parts.append(f'<span id="{sent_id}" style="{style}">{escaped} </span>')
 
     parts.append('</div>')
+    content = "".join(parts)
     if wrap:
-        parts.append('</details>')
-    return "".join(parts)
+        return _wrap_review_card(label, content, collapsible=True)
+    elif label:
+        return _wrap_review_card(label, content, collapsible=False)
+    return content
 
 
 def format_summary_cards(
@@ -592,7 +611,7 @@ def format_common_themes(
         f'padding:10px 14px;list-style:none;background:#f9fafb;border-bottom:1px solid #e5e7eb;'
         f'user-select:none;display:flex;align-items:center;gap:6px;">'
         f'<span class="collapse-arrow" style="display:inline-block;transition:transform 0.2s;'
-        f'font-size:0.75em;">&#9660;</span>'
+        f'font-size:0.75em;">&#9654;</span>'
         f'Common Themes Across Reviews</summary>'
         f'<div style="padding:8px 10px;">{inner}</div>'
         f'</details>'
@@ -738,25 +757,6 @@ def render_agreement_html(
     )
 
     parts = []
-    if wrap:
-        parts.append(
-            '<details open class="review-collapse" style="border:1px solid #d1d5db;border-radius:8px;'
-            'padding:0;margin-bottom:10px;overflow:hidden;">'
-            f'<summary style="font-weight:600;font-size:0.85em;color:#374151;cursor:pointer;'
-            f'list-style:none;display:flex;align-items:center;gap:6px;'
-            f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
-            f'<span style="transition:transform 0.2s;font-size:0.7em;">▼</span> '
-            f'{_html.escape(label)}</summary>'
-            '<div style="padding:12px 16px;">'
-        )
-    else:
-        if label:
-            parts.append(
-                f'<div style="border:1px solid #d1d5db;border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
-                f'<div style="background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;'
-                f'font-weight:600;font-size:0.85em;color:#374151;">{_html.escape(label)}</div>'
-                f'<div style="padding:12px 16px;">'
-            )
     parts.append(legend_html)
     parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
 
@@ -841,13 +841,12 @@ def render_agreement_html(
         )
 
     parts.append("</div>")  # close sentence container
+    content = "".join(parts)
     if wrap:
-        parts.append("</div>")  # close inner padding div
-        parts.append("</details>")
+        return _wrap_review_card(label, content, collapsible=True)
     elif label:
-        parts.append("</div>")  # close inner padding div
-        parts.append("</div>")  # close outer border div
-    return "".join(parts)
+        return _wrap_review_card(label, content, collapsible=False)
+    return content
 
 
 # Auto-detect the preprocessed dataset CSV
@@ -1621,16 +1620,8 @@ with gr.Blocks(
                         )
 
                     # Wrap review content + rebuttal in a single collapsible card
-                    html_content = (
-                        '<details open class="review-collapse" style="border:1px solid #d1d5db;'
-                        'border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
-                        f'<summary style="font-weight:600;font-size:0.9em;color:#374151;cursor:pointer;'
-                        f'list-style:none;display:flex;align-items:center;gap:6px;'
-                        f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
-                        f'<span style="transition:transform 0.2s;font-size:0.7em;">▼</span> '
-                        f'{_html.escape(review_label)}</summary>'
-                        f'<div style="padding:12px 16px;">{inner_html}{rebuttal_html}</div>'
-                        '</details>'
+                    html_content = _wrap_review_card(
+                        review_label, f'{inner_html}{rebuttal_html}', collapsible=True
                     )
 
                     agreement_updates.append(gr.update(visible=True, value=html_content))
