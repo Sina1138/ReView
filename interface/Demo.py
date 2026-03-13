@@ -40,21 +40,161 @@ def _get_context(sentence: str, sentence_lists: list):
     return "", ""
 
 
+_TOGGLE_BTN_STYLE = (
+    'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
+    'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
+    'line-height:1.4;height:28px;box-sizing:border-box;'
+)
+
 def _rebuttal_toggle_html() -> str:
     """Generate an Expand/Collapse All Responses toggle button with inline JS."""
     return (
-        '<div style="display:flex;justify-content:flex-end;margin-bottom:4px;">'
         '<button onclick="'
         "let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
-        "let details=tab.querySelectorAll('details');"
+        "let details=tab.querySelectorAll('details:not(.review-collapse)');"
+        "if(!details.length)return;"
         "let allOpen=Array.from(details).every(d=>d.open);"
         "details.forEach(d=>d.open=!allOpen);"
         "this.textContent=allOpen?'Expand All Responses':'Collapse All Responses';"
-        '" style="'
-        'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
-        'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
-        '">Expand All Responses</button></div>'
+        f'" style="{_TOGGLE_BTN_STYLE}"'
+        '>Expand All Responses</button>'
     )
+
+
+def _review_toggle_html() -> str:
+    """Generate a Collapse/Expand All Reviews toggle button with inline JS."""
+    return (
+        '<button onclick="'
+        "let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
+        "let details=tab.querySelectorAll('details.review-collapse');"
+        "if(!details.length)return;"
+        "let allOpen=Array.from(details).every(d=>d.open);"
+        "details.forEach(d=>d.open=!allOpen);"
+        "this.textContent=allOpen?'Expand All Reviews':'Collapse All Reviews';"
+        f'" style="{_TOGGLE_BTN_STYLE}"'
+        '>Collapse All Reviews</button>'
+    )
+
+
+import re as _re
+
+def _should_break_before(sent: str) -> bool:
+    """Detect if a paragraph break should be inserted before this sentence."""
+    s = sent.strip()
+    # Numbered items: 1), 2., (1), 1:, etc.
+    if _re.match(r'^[\(\[]?\d+[\)\]\.:]', s):
+        return True
+    # Dash/bullet items
+    if len(s) > 2 and s[0] in ('-', '•', '*', '–', '—') and s[1] == ' ':
+        return True
+    # Markdown separators / headers
+    if s.startswith('##') or s.startswith('---'):
+        return True
+    # Common review section headers
+    if _re.match(
+        r'^\*{0,2}(Rating|Strengths?|Weaknesses?|Questions?|Limitations?|Summary|'
+        r'Soundness|Presentation|Contribution|Confidence|Experience|Review Assessment|'
+        r'Recommendation|Overall|Minor|Major|Typos?|Suggestions?|Comments?|'
+        r'Detailed\s+Comments?|Pros?|Cons?|Flag|Clarity|Significance|Originality)',
+        s, _re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _is_review_header(sent: str) -> bool:
+    """Detect if a sentence is a review metadata header (Rating:, Experience:, etc.)."""
+    return bool(_re.match(
+        r'^\*{0,2}(Rating|Confidence|Experience|Review Assessment|Recommendation|Flag)\b',
+        sent.strip(), _re.IGNORECASE,
+    ))
+
+
+# ---- Polarity / Topic color maps for HTML rendering ----
+_POLARITY_COLORS = {2: "#d4fcd6", 0: "#fcd6d6"}  # positive=green, negative=red
+_TOPIC_HTML_COLORS = {
+    "Substance": "#b3e5fc",
+    "Clarity": "#c8e6c9",
+    "Soundness/Correctness": "#fff9c4",
+    "Originality": "#f8bbd0",
+    "Motivation/Impact": "#d1c4e9",
+    "Meaningful Comparison": "#ffe0b2",
+    "Replicability": "#b2dfdb",
+}
+
+
+def render_review_html(
+    review_items: list,
+    mode: str = "plain",
+    label: str = "Review",
+    wrap: bool = False,
+) -> str:
+    """
+    Render a review as HTML with proper paragraph formatting.
+
+    Args:
+        review_items: list of (sentence, metadata_dict) tuples
+        mode: "plain", "polarity", or "topic"
+        label: header label
+        wrap: if False, return bare content (caller handles outer wrapper)
+    """
+    if not review_items:
+        return ""
+
+    parts = []
+    if wrap:
+        parts.append(
+            '<details open class="review-collapse" style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
+            f'<summary style="font-weight:600;font-size:0.85em;color:#374151;cursor:pointer;'
+            f'list-style:none;display:flex;align-items:center;gap:6px;">'
+            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+            f'{_html.escape(label)}</summary>'
+        )
+    else:
+        if label:
+            parts.append(f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>')
+    parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
+
+    for i, (sent, metadata) in enumerate(review_items):
+        # Paragraph break detection
+        if i > 0 and _should_break_before(sent):
+            parts.append('<br>')
+
+        # Header styling (Rating:, Experience:, etc.)
+        is_header = _is_review_header(sent)
+
+        bg = ""
+        label_text = ""
+        if mode == "polarity":
+            polarity = metadata.get("polarity")
+            if polarity in _POLARITY_COLORS:
+                bg = f"background:{_POLARITY_COLORS[polarity]};"
+        elif mode == "topic":
+            topic = metadata.get("topic")
+            if topic and topic != "NONE" and topic in _TOPIC_HTML_COLORS:
+                bg = f"background:{_TOPIC_HTML_COLORS[topic]};"
+                label_text = topic
+
+        style = f"padding:1px 3px;border-radius:3px;{bg}"
+        if is_header:
+            style += "font-weight:600;color:#92400e;"
+
+        sent_id = _make_sentence_id(sent)
+        escaped = _html.escape(sent)
+
+        if label_text:
+            # Show topic label as a small tag
+            parts.append(
+                f'<span id="{sent_id}" style="{style}" title="{_html.escape(label_text)}">'
+                f'{escaped} </span>'
+            )
+        else:
+            parts.append(f'<span id="{sent_id}" style="{style}">{escaped} </span>')
+
+    parts.append('</div>')
+    if wrap:
+        parts.append('</details>')
+    return "".join(parts)
 
 
 def format_summary_cards(
@@ -287,6 +427,7 @@ def render_agreement_html(
     speaker: Dict[str, Dict[str, float]],
     num_reviews: int,
     label: str = "Agreement",
+    wrap: bool = False,
 ) -> str:
     """
     Custom HTML renderer for Agreement mode (replaces gr.HighlightedText).
@@ -310,21 +451,39 @@ def render_agreement_html(
         '</div>'
     )
 
-    parts = [f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>']
+    parts = []
+    if wrap:
+        parts.append(
+            '<details open class="review-collapse" style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
+            f'<summary style="font-weight:600;font-size:0.85em;color:#374151;cursor:pointer;'
+            f'list-style:none;display:flex;align-items:center;gap:6px;">'
+            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+            f'{_html.escape(label)}</summary>'
+        )
+    else:
+        if label:
+            parts.append(f'<div style="font-weight:600;font-size:0.85em;color:#374151;margin-bottom:4px;">{_html.escape(label)}</div>')
     parts.append(legend_html)
-    parts.append('<div style="line-height:1.8;font-size:0.95em;">')
+    parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
 
     # Compute informativeness threshold: 2 / K (twice uniform baseline)
     k = max(len(uniqueness), 1)
     info_threshold = 2.0 / k
 
-    for sent in sentences:
+    for idx, sent in enumerate(sentences):
+        # Paragraph break detection
+        if idx > 0 and _should_break_before(sent):
+            parts.append('<br>')
+
         sent_id = _make_sentence_id(sent)
         score = uniqueness.get(sent)
 
+        # Header styling (Rating:, Experience:, etc.)
+        header_style = "font-weight:600;color:#92400e;" if _is_review_header(sent) else ""
+
         if score is None or abs(score) < HIGHLIGHT_THRESHOLD:
             # No highlight
-            parts.append(f'<span id="{sent_id}">{_html.escape(sent)} </span>')
+            parts.append(f'<span id="{sent_id}" style="{header_style}">{_html.escape(sent)} </span>')
             continue
 
         # --- Color and opacity ---
@@ -388,6 +547,8 @@ def render_agreement_html(
         )
 
     parts.append("</div>")
+    if wrap:
+        parts.append("</details>")
     return "".join(parts)
 
 
@@ -963,7 +1124,12 @@ details summary::-webkit-details-marker { display: none; }
 details[open] summary span:first-child { display: inline-block; transform: rotate(90deg); }
 """
 
-with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
+with gr.Blocks(
+    title="ReView",
+    css=CUSTOM_CSS,
+    theme=gr.themes.Default(),
+    js="() => { document.querySelector('body').classList.remove('dark'); }",
+) as demo:
     # gr.Markdown("# ReView Interface")
     
     # TODO: Uncomment this for home/description tab once finished with testing.
@@ -1121,61 +1287,58 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 if i < number_of_displayed_reviews:
                     review_item, rebuttal_html = review_items_cache[i]
 
-                    if show_polarity:
-                        highlighted = []
-                        for sentence, metadata in review_item:
-                            polarity = metadata.get("polarity", None)
-                            if polarity == 2:
-                                label = "➕"
-                            elif polarity == 0:
-                                label = "➖"
-                            else:
-                                label = None
-                            highlighted.append((sentence, label))
-                    elif show_consensuality:
-                        highlighted = [(sentence, None) for sentence, _ in review_item]
-                    elif show_topic:
-                        highlighted = []
-                        for sentence, metadata in review_item:
-                            topic = metadata.get("topic", None)
-                            if topic != "NONE":
-                                highlighted.append((sentence, topic))
-                            else:
-                                highlighted.append((sentence, None))
-                    else:
-                        highlighted = [
-                            (sentence, None)
-                            for sentence, _ in review_item
-                        ]
-
-                    # HighlightedText: visible for all modes except agreement
+                    # All modes now use HTML rendering for proper paragraph formatting.
+                    # HighlightedText is always hidden; prep_agreement HTML is always shown.
                     review_updates.append(
                         gr.update(
-                            visible=not show_consensuality,
-                            value=highlighted,
+                            visible=False,
+                            value=[],
+                            show_legend=False,
                             color_map=color_map,
-                            show_legend=legend,
                             key=f"updated_{score_type}_{i}"
                         )
                     )
 
-                    # Agreement HTML: visible only in agreement mode
+                    review_label = f"Review {i + 1}"
                     if show_consensuality:
                         sentences_for_review = [s for s, _ in review_item]
-                        agreement_html = render_agreement_html(
+                        inner_html = render_agreement_html(
                             sentences_for_review, consensuality_dict,
                             listener=prep_listener, speaker=prep_speaker,
                             num_reviews=number_of_displayed_reviews,
-                            label=f"Agreement in Review {i + 1}",
+                            label="",
                         )
                         # Append per-review divergent cards (if RSA data available)
                         if i in divergent_per_review:
-                            agreement_html += divergent_per_review[i]
-                        agreement_updates.append(gr.update(visible=True, value=agreement_html))
+                            inner_html += divergent_per_review[i]
+                    elif show_polarity:
+                        inner_html = render_review_html(
+                            review_item, mode="polarity", label="",
+                        )
+                    elif show_topic:
+                        inner_html = render_review_html(
+                            review_item, mode="topic", label="",
+                        )
                     else:
-                        agreement_updates.append(gr.update(visible=False, value=""))
+                        inner_html = render_review_html(
+                            review_item, mode="plain", label="",
+                        )
 
-                    rebuttal_updates.append(gr.update(visible=bool(rebuttal_html), value=rebuttal_html))
+                    # Wrap review content + rebuttal in a single collapsible card
+                    html_content = (
+                        '<details open class="review-collapse" style="border:1px solid #e5e7eb;'
+                        'border-radius:8px;padding:12px 16px;margin-bottom:10px;">'
+                        f'<summary style="font-weight:600;font-size:0.9em;color:#374151;cursor:pointer;'
+                        f'list-style:none;display:flex;align-items:center;gap:6px;">'
+                        f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
+                        f'{_html.escape(review_label)}</summary>'
+                        f'{inner_html}{rebuttal_html}'
+                        '</details>'
+                    )
+
+                    agreement_updates.append(gr.update(visible=True, value=html_content))
+                    # Rebuttal is now embedded in the review card, so hide the separate component
+                    rebuttal_updates.append(gr.update(visible=False, value=""))
                 else:
                     review_updates.append(
                         gr.update(
@@ -1225,33 +1388,44 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 most_common_visibility = gr.update(visible=False, value="")
                 most_unique_visibility = gr.update(visible=False, value="")
                 
-            # update topic color map
-            if show_topic:
-                topic_color_map_visibility = gr.update(
-                    visible=True,
-                    color_map=topic_color_map,
-                    value=[
-                        ("", "Substance"),
-                        ("", "Clarity"),
-                        ("", "Soundness/Correctness"),
-                        ("", "Originality"),
-                        ("", "Motivation/Impact"),
-                        ("", "Meaningful Comparison"),
-                        ("", "Replicability"),
-                    ]
+            # update color legend (topic or polarity)
+            if show_polarity:
+                polarity_legend = (
+                    '<div style="display:flex;gap:12px;align-items:center;padding:8px 0;font-size:0.8em;">'
+                    '<span style="background:#d4fcd6;padding:2px 8px;border-radius:4px;">Positive</span>'
+                    '<span style="background:#fcd6d6;padding:2px 8px;border-radius:4px;">Negative</span>'
+                    '<span style="color:#9ca3af;">Neutral (no highlight)</span>'
+                    '</div>'
                 )
+                topic_color_map_visibility = gr.update(visible=True, value=polarity_legend)
+            elif show_topic:
+                legend_items = " ".join(
+                    f'<span style="background:{color};padding:2px 8px;border-radius:4px;'
+                    f'font-size:0.8em;margin-right:4px;">{_html.escape(name)}</span>'
+                    for name, color in _TOPIC_HTML_COLORS.items()
+                )
+                topic_legend_html = (
+                    f'<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;'
+                    f'padding:8px 0;">{legend_items}</div>'
+                )
+                topic_color_map_visibility = gr.update(visible=True, value=topic_legend_html)
             else:
-                topic_color_map_visibility = gr.update(visible=False, value=[])
+                topic_color_map_visibility = gr.update(visible=False, value="")
 
-            # Toggle button for expanding/collapsing all author responses
+            # Toggle bar: review collapse + rebuttal expand buttons
             has_any_rebuttal = any(
-                r.get("value", "") for r in rebuttal_updates
-                if isinstance(r, dict)
+                rebuttal_html
+                for _, rebuttal_html in review_items_cache
             )
+            toggle_buttons = [_review_toggle_html()]
             if has_any_rebuttal:
-                rebuttal_toggle_update = gr.update(visible=True, value=_rebuttal_toggle_html())
-            else:
-                rebuttal_toggle_update = gr.update(visible=False, value="")
+                toggle_buttons.append(_rebuttal_toggle_html())
+            toggle_bar_html = (
+                '<div style="display:flex;justify-content:flex-end;gap:8px;">'
+                + "".join(toggle_buttons)
+                + '</div>'
+            )
+            toggle_bar_update = gr.update(visible=True, value=toggle_bar_html)
 
             return (
                 new_review_id,
@@ -1260,7 +1434,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 most_common_visibility,
                 most_unique_visibility,
                 topic_color_map_visibility,
-                rebuttal_toggle_update,  # Toggle button
+                toggle_bar_update,  # Review collapse + rebuttal expand buttons
                 *rebuttal_updates,  # 10 per-review rebuttals
                 general_rebuttal_update,  # General rebuttal section
                 state
@@ -1304,20 +1478,12 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
                 label="Most Divergent Opinions",
             )
         
-        # Add a new textbox for topic labels and colors
-        topic_text_box = gr.HighlightedText(
-            label="Topic Labels (Color-Coded)",
-            visible=False,
-            value=[],
-            show_legend=True,
-        )
+        # Topic color legend (HTML version)
+        topic_text_box = gr.HTML(visible=False, value="")
         
         with gr.Row():
             gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
-            prep_rebuttal_toggle = gr.HTML(
-                visible=False, value="",
-                elem_classes=["rebuttal-toggle-container"],
-            )
+            prep_toggle_bar = gr.HTML(visible=False, value="")
         review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
         prep_agreement1 = gr.HTML(visible=False, value="")
         prep_rebuttal1 = gr.HTML(visible=False, value="")
@@ -1373,7 +1539,7 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_rebuttal_toggle, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
+        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_toggle_bar, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
         year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
         score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
         next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
@@ -1533,13 +1699,16 @@ with gr.Blocks(title="ReView", css=CUSTOM_CSS) as demo:
             general_formatted = format_general_rebuttals(rebuttal or "")
             has_general = bool(general_formatted)
 
-            # Show toggle if any rebuttals exist
+            # Toggle bar: review collapse + rebuttal expand
             has_any = any(bool(format_rebuttal_for_review(rebuttal or "", i)) for i in range(1, 7)) or has_general
+            toggle_buttons = [_review_toggle_html()]
             if has_any:
-                toggle_html = _rebuttal_toggle_html()
-                toggle_update = gr.update(visible=True, value=toggle_html)
-            else:
-                toggle_update = gr.update(visible=False, value="")
+                toggle_buttons.append(_rebuttal_toggle_html())
+            toggle_bar = (
+                '<div style="display:flex;justify-content:flex-end;gap:8px;">'
+                + "".join(toggle_buttons) + '</div>'
+            )
+            toggle_update = gr.update(visible=True, value=toggle_bar)
 
             return (
                 gr.update(visible=False),   # input_section
