@@ -3,6 +3,7 @@ logs_and_guides/
 !README.md
 *.md
 logs/
+.rtk/
 
 # validation and training files -- to be added back after
 validation/

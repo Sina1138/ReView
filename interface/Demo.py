@@ -18,8 +18,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Lower = more vivid colors (0.2 = very strong, 1.0 = no amplification).
 # Asymmetric: unique/red (positive) is amplified less than common/blue (negative)
 # to avoid overwhelming red when most sentences are unique.
-AGREEMENT_AMP_UNIQUE = 0.95  # exponent for positive scores (red = unique)
-AGREEMENT_AMP_COMMON = 0.65  # exponent for negative scores (blue = common)
+AGREEMENT_AMP_UNIQUE = 1.0  # exponent for positive scores (red = unique)
+AGREEMENT_AMP_COMMON = 1.0  # exponent for negative scores (blue = common)
 
 import html as _html
 
