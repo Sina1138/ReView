@@ -1,10 +1,14 @@
 import sys, os.path
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
+from collections import defaultdict
 import hashlib
 import json
 import math
+import re as _re
+import html as _html
 import torch
+import numpy as np
 import gradio as gr
 import pandas as pd
 import ast
@@ -20,13 +24,60 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # to avoid overwhelming red when most sentences are unique.
 AGREEMENT_AMP_UNIQUE = 1.0  # exponent for positive scores (red = unique)
 AGREEMENT_AMP_COMMON = 1.0  # exponent for negative scores (blue = common)
+MAX_PREPROCESSED_REVIEWS = 10  # Number of review/agreement/rebuttal slots in pre-processed tab
+LISTENER_CONCENTRATION_THRESHOLD = 0.70  # Above this, listener "wins" over uniqueness score
+INFORMATIVENESS_MULTIPLIER = 2.0  # Multiplied by uniform baseline (1/K) for informativeness threshold
 
-import html as _html
 
 def _make_sentence_id(sentence: str) -> str:
     """Deterministic DOM ID for a sentence, used by click-to-scroll."""
     return "sent_" + hashlib.md5(sentence.encode("utf-8")).hexdigest()[:12]
 
+
+def _click_to_scroll_js(sent_id: str, color: str = "#3b82f6") -> str:
+    """Return inline onclick JS for smooth-scroll + outline flash."""
+    return (
+        f"(function(){{var el=document.getElementById('{sent_id}');"
+        f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
+        f"el.style.outline='3px solid {color}';"
+        f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
+    )
+
+
+def _source_badges_html(sent: str, sentence_lists: list) -> str:
+    """Return R# badge HTML for all reviews containing the sentence."""
+    source = [r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl]
+    return " ".join(
+        f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
+        f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
+        for n in source
+    )
+
+
+def _listener_dist_bars(sent: str, listener: dict, source_badges: str,
+                        badge_fg: str = "#1e40af") -> str:
+    """Render L_t(d|s) distribution bars or plain badge row."""
+    if listener and sent in listener:
+        dist = listener[sent]
+        bar_parts = []
+        for label, prob in sorted(dist.items()):
+            pct = int(round(prob * 100))
+            bar_w = max(2, int(prob * 80))
+            bar_parts.append(
+                f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
+                f'<span style="font-size:0.7em;font-weight:600;color:{badge_fg};">{label}</span>'
+                f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
+                f'background:#3b82f6;border-radius:3px;"></span>'
+                f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
+                f'</span>'
+            )
+        return (
+            f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
+            f'{source_badges}'
+            f'<span style="color:#d1d5db;font-size:0.75em;">\u2192</span> '
+            + "".join(bar_parts) + "</div>"
+        )
+    return f'<div style="display:flex;gap:4px;margin-bottom:3px;">{source_badges}</div>'
 
 
 def _get_context(sentence: str, sentence_lists: list):
@@ -46,37 +97,36 @@ _TOGGLE_BTN_STYLE = (
     'line-height:1.4;height:28px;box-sizing:border-box;'
 )
 
-def _rebuttal_toggle_html() -> str:
-    """Generate an Expand/Collapse All Responses toggle button with inline JS."""
+def _toggle_html(selector: str, text_when_all_open: str,
+                 text_when_not_all_open: str, initial_label: str) -> str:
+    """Generate a toggle button for expanding/collapsing details elements."""
     return (
         '<button onclick="'
-        "let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
-        "let details=tab.querySelectorAll('details:not(.review-collapse)');"
+        f"let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
+        f"let details=tab.querySelectorAll('{selector}');"
         "if(!details.length)return;"
         "let allOpen=Array.from(details).every(d=>d.open);"
         "details.forEach(d=>d.open=!allOpen);"
-        "this.textContent=allOpen?'Expand All Responses':'Collapse All Responses';"
+        f"this.textContent=allOpen?'{text_when_all_open}':'{text_when_not_all_open}';"
         f'" style="{_TOGGLE_BTN_STYLE}"'
-        '>Expand All Responses</button>'
+        f'>{initial_label}</button>'
     )
+
+
+def _rebuttal_toggle_html() -> str:
+    """Generate an Expand/Collapse All Responses toggle button with inline JS."""
+    return _toggle_html("details:not(.review-collapse)",
+                        "Expand All Responses", "Collapse All Responses",
+                        "Expand All Responses")
 
 
 def _review_toggle_html() -> str:
     """Generate a Collapse/Expand All Reviews toggle button with inline JS."""
-    return (
-        '<button onclick="'
-        "let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
-        "let details=tab.querySelectorAll('details.review-collapse');"
-        "if(!details.length)return;"
-        "let allOpen=Array.from(details).every(d=>d.open);"
-        "details.forEach(d=>d.open=!allOpen);"
-        "this.textContent=allOpen?'Expand All Reviews':'Collapse All Reviews';"
-        f'" style="{_TOGGLE_BTN_STYLE}"'
-        '>Collapse All Reviews</button>'
-    )
+    return _toggle_html("details.review-collapse",
+                        "Expand All Reviews", "Collapse All Reviews",
+                        "Collapse All Reviews")
 
 
-import re as _re
 
 def _should_break_before(sent: str) -> bool:
     """Detect if a paragraph break should be inserted before this sentence."""
@@ -262,46 +312,12 @@ def format_summary_cards(
         context_before, context_after = _get_context(sent, sentence_lists)
 
         # --- Source badge: which review(s) this sentence physically appears in ---
-        source_reviews = [r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl]
-        source_badge = " ".join(
-            f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
-            f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
-            for n in source_reviews
-        )
+        source_badge = _source_badges_html(sent, sentence_lists)
 
         # --- L_t(d|s) distribution bars ---
-        dist_html = ""
-        if listener and sent in listener:
-            dist = listener[sent]
-            bar_parts = []
-            for label, prob in sorted(dist.items()):
-                pct = int(round(prob * 100))
-                bar_w = max(2, int(prob * 80))
-                bar_parts.append(
-                    f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
-                    f'<span style="font-size:0.7em;font-weight:600;color:{badge_fg};">{label}</span>'
-                    f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
-                    f'background:#3b82f6;border-radius:3px;"></span>'
-                    f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
-                    f'</span>'
-                )
-            dist_html = (
-                f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
-                f'{source_badge}'
-                f'<span style="color:#d1d5db;font-size:0.75em;">→</span> '
-                + "".join(bar_parts)
-                + "</div>"
-            )
-        else:
-            dist_html = f'<div style="display:flex;gap:4px;margin-bottom:3px;">{source_badge}</div>'
+        dist_html = _listener_dist_bars(sent, listener, source_badge, badge_fg=badge_fg)
 
-        # Click-to-scroll via inline JS
-        onclick = (
-            f"(function(){{var el=document.getElementById('{sent_id}');"
-            f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-            f"el.style.outline='3px solid #3b82f6';"
-            f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
-        )
+        onclick = _click_to_scroll_js(sent_id)
 
         # Inline context: ...before SENTENCE after...  (all one line)
         before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
@@ -364,8 +380,6 @@ def format_common_themes(
         return ""
 
     # --- Step 1: Build per-sentence (topic, polarity) index ---
-    from collections import defaultdict
-
     # topic_data[topic][polarity][r_idx] = [sentences]
     topic_data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
 
@@ -408,8 +422,7 @@ def format_common_themes(
     if not common_topics:
         if not uniqueness:
             return ""
-        import pandas as _pd
-        scores_series = _pd.Series(uniqueness)
+        scores_series = pd.Series(uniqueness)
         n_seed = min(5, len(scores_series))
         fallback = scores_series.nsmallest(n_seed).index.tolist()
         if not fallback:
@@ -432,43 +445,10 @@ def format_common_themes(
         ]
         for sent in fallback:
             sent_id = _make_sentence_id(sent)
-            source = [r + 1 for r, sl in enumerate(sentence_lists) if sent in sl]
-            badges = " ".join(
-                f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
-                f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
-                for n in source
-            )
-            # Listener distribution bars
-            dist_html = ""
-            if listener and sent in listener:
-                dist = listener[sent]
-                bar_parts = []
-                for label, prob in sorted(dist.items()):
-                    pct = int(round(prob * 100))
-                    bar_w = max(2, int(prob * 80))
-                    bar_parts.append(
-                        f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
-                        f'<span style="font-size:0.7em;font-weight:600;color:#1e40af;">{label}</span>'
-                        f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
-                        f'background:#3b82f6;border-radius:3px;"></span>'
-                        f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
-                        f'</span>'
-                    )
-                dist_html = (
-                    f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
-                    f'{badges}'
-                    f'<span style="color:#d1d5db;font-size:0.75em;">→</span> '
-                    + "".join(bar_parts) + "</div>"
-                )
-            else:
-                dist_html = f'<div style="margin-bottom:2px;">{badges}</div>'
+            badges = _source_badges_html(sent, sentence_lists)
+            dist_html = _listener_dist_bars(sent, listener, badges)
 
-            onclick = (
-                f"(function(){{var el=document.getElementById('{sent_id}');"
-                f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-                f"el.style.outline='3px solid #3b82f6';"
-                f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
-            )
+            onclick = _click_to_scroll_js(sent_id)
             parts.append(
                 f'<div style="border:1px solid #e5e7eb;border-left:3px solid #d1d5db;'
                 f'border-radius:6px;padding:6px 10px;margin-bottom:4px;cursor:pointer;" '
@@ -500,12 +480,7 @@ def format_common_themes(
         """Render a single sentence row with R# badge and click-to-scroll."""
         r_label = f"R{r_idx + 1}"
         sent_id = _make_sentence_id(sent)
-        onclick = (
-            f"(function(){{var el=document.getElementById('{sent_id}');"
-            f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-            f"el.style.outline='3px solid #3b82f6';"
-            f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
-        )
+        onclick = _click_to_scroll_js(sent_id)
         return (
             f'<div style="display:flex;align-items:baseline;gap:6px;padding:2px 0;'
             f'padding-left:8px;cursor:pointer;" '
@@ -636,7 +611,6 @@ def format_divergent_cards(
     if not uniqueness or not listener or not speaker:
         return {}
 
-    import numpy as np
     num_reviews = len(speaker)
     if num_reviews == 0:
         return {}
@@ -646,7 +620,7 @@ def format_divergent_cards(
 
     # Minimum speaker score to suppress generic filler.
     k = max(sum(len(v) for v in speaker.values()) // max(len(speaker), 1), 1)
-    min_speaker_score = 2.0 / k
+    min_speaker_score = INFORMATIVENESS_MULTIPLIER / k
 
     # Group sentences by their argmax review
     grouped: dict = {label: [] for label in review_labels}
@@ -697,12 +671,7 @@ def format_divergent_cards(
                 f'{dom_pct}% listener share</span>'
             )
 
-            onclick = (
-                f"(function(){{var el=document.getElementById('{sent_id}');"
-                f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-                f"el.style.outline='3px solid #ef4444';"
-                f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
-            )
+            onclick = _click_to_scroll_js(sent_id, "#ef4444")
 
             before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
             after_span = f'<span style="{ctx_style}"> {_html.escape(context_after)}...</span>' if context_after else ""
@@ -762,7 +731,7 @@ def render_agreement_html(
 
     # Compute informativeness threshold: 2 / K (twice uniform baseline)
     k = max(len(uniqueness), 1)
-    info_threshold = 2.0 / k
+    info_threshold = INFORMATIVENESS_MULTIPLIER / k
 
     for idx, sent in enumerate(sentences):
         # Paragraph break detection
@@ -793,7 +762,7 @@ def render_agreement_html(
                 # If listener is highly concentrated on one reviewer (>70%), the RSA
                 # uniqueness score and listener disagree — trust the listener and
                 # suppress blue. This prevents e.g. R2 91% sentences from appearing blue.
-                if max_prob > 0.70:
+                if max_prob > LISTENER_CONCENTRATION_THRESHOLD:
                     opacity = 0.0
                 else:
                     opacity = (entropy / max_entropy) ** AGREEMENT_AMP_COMMON if max_entropy > 0 else 0.0
@@ -1082,18 +1051,34 @@ def fetch_openreview_reviews(link: str):
         raise gr.Error(f"{error_msg}{suggestion}")
 
 
+def _parse_rebuttal_json(rebuttal: str) -> Optional[list]:
+    """Parse rebuttal JSON string, returning list of items or None."""
+    if not rebuttal or not rebuttal.strip():
+        return None
+    try:
+        items = json.loads(rebuttal)
+        return items if items else None
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return None
+
+
+_REBUTTAL_PER_REVIEW_STYLE = (
+    "margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;"
+    "border:1px solid #fde68a;background:#fffef5;"
+)
+_REBUTTAL_GENERAL_STYLE = (
+    "margin-top:16px;border-radius:8px;overflow:hidden;"
+    "border:1px solid #fde68a;"
+)
+
+
 def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
     """Format rebuttals that reply to a specific review number."""
     if not rebuttal or not rebuttal.strip():
         return ""
 
-    CARD_STYLE = "margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;"
-
-    try:
-        items = json.loads(rebuttal)
-        if not items:
-            return ""
-
+    items = _parse_rebuttal_json(rebuttal)
+    if items is not None:
         # Filter to only rebuttals for this review
         relevant = [item for item in items if item.get("reply_to") == review_num]
         if not relevant:
@@ -1115,7 +1100,7 @@ def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
             return ""
 
         return (
-            f'<details style="{CARD_STYLE}">'
+            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
             f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
             f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
             f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
@@ -1123,20 +1108,19 @@ def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
             + "</details>"
         )
 
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        # Plain text - show under first review only
-        if review_num == 1:
-            text = rebuttal.strip()
-            return (
-                f'<details style="{CARD_STYLE}">'
-                f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-                f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-                f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-                f'<div style="padding:10px 14px;">'
-                f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
-                f'</div></details>'
-            )
-        return ""
+    # Plain text - show under first review only
+    if review_num == 1:
+        text = rebuttal.strip()
+        return (
+            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
+            f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+            f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+            f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
+            f'<div style="padding:10px 14px;">'
+            f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
+            f'</div></details>'
+        )
+    return ""
 
 
 def format_general_rebuttals(rebuttal: str) -> str:
@@ -1144,15 +1128,11 @@ def format_general_rebuttals(rebuttal: str) -> str:
     if not rebuttal or not rebuttal.strip():
         return ""
 
-    CARD_STYLE = "margin-top:16px;border-radius:8px;overflow:hidden;border:1px solid #fde68a;"
     HEADER_STYLE = "background:#fffbeb;padding:10px 16px;border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:8px;"
     TITLE_STYLE = "font-weight:600;color:#92400e;"
 
-    try:
-        items = json.loads(rebuttal)
-        if not items:
-            return ""
-
+    items = _parse_rebuttal_json(rebuttal)
+    if items is not None:
         # Filter to only general rebuttals (no specific reply_to)
         general = [item for item in items if item.get("reply_to") is None]
         if not general:
@@ -1177,7 +1157,7 @@ def format_general_rebuttals(rebuttal: str) -> str:
 
         count_label = f"{len(response_parts)} general response{'s' if len(response_parts) > 1 else ''}"
         return (
-            f'<details style="{CARD_STYLE}">'
+            f'<details style="{_REBUTTAL_GENERAL_STYLE}">'
             f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
             f'<span style="font-size:1.1em;">💬</span>'
             f'<span style="{TITLE_STYLE}">General Author Response</span>'
@@ -1186,18 +1166,18 @@ def format_general_rebuttals(rebuttal: str) -> str:
             + "".join(response_parts) +
             '</details>'
         )
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        # Plain text - treat as general response
-        text = rebuttal.strip()
-        return (
-            f'<details style="{CARD_STYLE}">'
-            f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
-            f'<span style="font-size:1.1em;">💬</span>'
-            f'<span style="{TITLE_STYLE}">General Author Response</span></summary>'
-            f'<div style="padding:14px 16px;background:white;">'
-            f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.9em;line-height:1.6;">{text}</div>'
-            f'</div></details>'
-        )
+
+    # Plain text - treat as general response
+    text = rebuttal.strip()
+    return (
+        f'<details style="{_REBUTTAL_GENERAL_STYLE}">'
+        f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
+        f'<span style="font-size:1.1em;">💬</span>'
+        f'<span style="{TITLE_STYLE}">General Author Response</span></summary>'
+        f'<div style="padding:14px 16px;background:white;">'
+        f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.9em;line-height:1.6;">{text}</div>'
+        f'</div></details>'
+    )
 
 
 def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, progress=gr.Progress()) -> Tuple:
@@ -1483,7 +1463,6 @@ with gr.Blocks(
             consensuality_dict = {}
 
             # Pre-compute robust normalization stats (median + IQR) for raw KL scores
-            import numpy as _np
             _kl_median, _kl_iqr = 0.0, 0.0
             if show_consensuality:
                 all_raw_scores = []
@@ -1495,14 +1474,16 @@ with gr.Blocks(
                     for _, metadata in items:
                         all_raw_scores.append(metadata.get("consensuality", 0.0))
                 if all_raw_scores:
-                    arr = _np.array(all_raw_scores)
-                    _kl_median = float(_np.median(arr))
-                    q25, q75 = float(_np.percentile(arr, 25)), float(_np.percentile(arr, 75))
+                    arr = np.array(all_raw_scores)
+                    _kl_median = float(np.median(arr))
+                    q25, q75 = float(np.percentile(arr, 25)), float(np.percentile(arr, 75))
                     _kl_iqr = q75 - q25
 
-            # Build per-review sentence lists (needed for agreement HTML + summary cards)
+            # Build per-review sentence lists, cache, and polarity/topic maps in a single pass
             review_sentence_lists = []
             review_items_cache = []  # Cache (review_item, rebuttal_html) per review
+            prep_polarity_map = {}
+            prep_topic_map = {}
             for idx in range(number_of_displayed_reviews):
                 review_data = current_review[idx]
                 rebuttal_html = ""
@@ -1511,7 +1492,7 @@ with gr.Blocks(
                     rebuttal = review_data.get("rebuttal", "")
                     if rebuttal and rebuttal.strip():
                         rebuttal_html = (
-                            '<details style="margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;border:1px solid #fde68a;background:#fffef5;">'
+                            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
                             '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
                             'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
                             '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
@@ -1524,16 +1505,8 @@ with gr.Blocks(
                 review_sentence_lists.append([s for s, _ in review_item])
                 review_items_cache.append((review_item, rebuttal_html))
 
-            # Build polarity/topic dicts from pre-processed metadata
-            # (same format as interactive tab, for consistent Common Themes rendering)
-            prep_polarity_map = {}
-            prep_topic_map = {}
-            for review_data in current_review:
-                if isinstance(review_data, dict) and "sentences" in review_data:
-                    items = review_data["sentences"].items()
-                else:
-                    items = review_data.items() if isinstance(review_data, dict) else []
-                for sent, meta in items:
+                # Build polarity/topic maps from pre-processed metadata
+                for sent, meta in review_item:
                     if not isinstance(meta, dict):
                         continue
                     pol_val = meta.get("polarity")
@@ -1578,7 +1551,7 @@ with gr.Blocks(
                     consensuality_dict, review_sentence_lists, prep_listener, prep_speaker,
                 )
 
-            for i in range(10):
+            for i in range(MAX_PREPROCESSED_REVIEWS):
                 if i < number_of_displayed_reviews:
                     review_item, rebuttal_html = review_items_cache[i]
 
@@ -1960,8 +1933,11 @@ with gr.Blocks(
         def _show_results_with_rebuttal(rebuttal):
             # Generate per-review rebuttals
             per_review = []
+            has_per_review = False
             for i in range(1, 7):
                 formatted = format_rebuttal_for_review(rebuttal or "", i)
+                if formatted:
+                    has_per_review = True
                 per_review.append(gr.update(visible=bool(formatted), value=formatted))
 
             # Generate general rebuttal section (only for rebuttals not tied to specific reviews)
@@ -1969,7 +1945,7 @@ with gr.Blocks(
             has_general = bool(general_formatted)
 
             # Toggle bar: review collapse + rebuttal expand
-            has_any = any(bool(format_rebuttal_for_review(rebuttal or "", i)) for i in range(1, 7)) or has_general
+            has_any = has_per_review or has_general
             toggle_buttons = [_review_toggle_html()]
             if has_any:
                 toggle_buttons.append(_rebuttal_toggle_html())

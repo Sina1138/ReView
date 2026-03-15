@@ -12,6 +12,7 @@ import json
 from typing import List, Tuple, Dict, Optional
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoModelForSequenceClassification
 import pandas as pd
+import numpy as np
 import re
 
 # Add parent directory to path
@@ -95,6 +96,20 @@ class InteractiveReviewProcessor:
             6: "Replicability",
             7: None  # Unclassified
         }
+
+    @staticmethod
+    def _normalize_uniqueness_scores(consensuality_scores):
+        """IQR-based normalization: median-centered, clipped to [-1, 1]."""
+        scores = consensuality_scores.copy()
+        vals = scores.values
+        median = np.median(vals)
+        q25, q75 = np.percentile(vals, 25), np.percentile(vals, 75)
+        iqr = q75 - q25
+        if iqr > 0:
+            scores = ((scores - median) / (iqr * 2)).clip(-1, 1)
+        else:
+            scores = scores * 0
+        return scores
 
     def predict_polarity(self, sentences: List[str]) -> Dict[str, Optional[str]]:
         """
@@ -180,19 +195,7 @@ class InteractiveReviewProcessor:
 
         # Robust normalization: median-centered, IQR-scaled, clipped to [-1, 1]
         # This avoids outliers dominating the color scale
-        import numpy as np
-        scores = consensuality_scores.copy()
-        vals = scores.values
-        median = np.median(vals)
-        q25, q75 = np.percentile(vals, 25), np.percentile(vals, 75)
-        iqr = q75 - q25
-        if iqr > 0:
-            # Center on median, scale so IQR spans ~[-0.5, 0.5], clip to [-1, 1]
-            scores = ((scores - median) / (iqr * 2)).clip(-1, 1)
-        else:
-            # All scores identical or near-identical
-            scores = scores * 0
-
+        scores = self._normalize_uniqueness_scores(consensuality_scores)
         return dict(scores)
 
     def predict_rsa_full(
@@ -210,8 +213,6 @@ class InteractiveReviewProcessor:
           speaker     — {R1: {sentence: prob}, ...}              S_t(s|d) distribution
           best_rsa    — {R1: sentence, R2: sentence, ...}        most characteristic sentence per review
         """
-        import numpy as np
-
         texts = [t for t in texts if t and t.strip()]
         if len(texts) < 2:
             return {}
@@ -235,16 +236,8 @@ class InteractiveReviewProcessor:
         best_rsa_arr, _, speaker_df, listener_df, _, _, _, consensuality_scores = \
             rsa_reranker.rerank(t=iterations)
 
-        # --- Normalize uniqueness scores (identical to predict_consensuality) ---
-        scores = consensuality_scores.copy()
-        vals = scores.values
-        median = np.median(vals)
-        q25, q75 = np.percentile(vals, 25), np.percentile(vals, 75)
-        iqr = q75 - q25
-        if iqr > 0:
-            scores = ((scores - median) / (iqr * 2)).clip(-1, 1)
-        else:
-            scores = scores * 0
+        # --- Normalize uniqueness scores ---
+        scores = self._normalize_uniqueness_scores(consensuality_scores)
         uniqueness = {s: float(v) for s, v in scores.items()}
 
         # --- Listener distribution L_t(d|s): exponentiate log-probs, normalize per column ---
