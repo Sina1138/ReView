@@ -444,140 +444,140 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
     forum_id = match.group(1).strip()
     print(f"[FETCH] Forum ID extracted: {forum_id}")
 
-    try:
-        print("[FETCH] Step 2: Initializing OpenReview client (guest access)...")
-        # Clear credentials from environment so client uses guest access
-        # (same approach as fetch_iclr_data.py)
-        env_backup = {}
-        for key in ['OPENREVIEW_USERNAME', 'OPENREVIEW_PASSWORD']:
-            if key in os.environ:
-                env_backup[key] = os.environ.pop(key)
-                print(f"[FETCH]   Temporarily cleared env var: {key}")
+    def _get_field(content, *field_names):
+        """Extract a field from v1 (plain str) or v2 ({"value": str}) content dicts."""
+        for field in field_names:
+            val = content.get(field, None) if isinstance(content, dict) else None
+            if val is None:
+                continue
+            if isinstance(val, dict):
+                val = val.get('value', '')
+            if val and isinstance(val, str):
+                return val
+        return None
 
+    def _get_invitations(note):
+        """Return all invitation strings for a note (v1: str, v2: list)."""
+        inv = getattr(note, 'invitation', None) or ''
+        invs = getattr(note, 'invitations', None) or []
+        result = []
+        if isinstance(inv, str) and inv:
+            result.append(inv)
+        if isinstance(invs, list):
+            result.extend(invs)
+        return result
+
+    def _fetch_with_client(client, forum_id):
+        """Fetch and parse notes using a given openreview client. Returns (reviews, title, rebuttal_json)."""
         try:
-            client = openreview.Client(baseurl='https://api.openreview.net')
-        finally:
-            # Restore environment variables
-            for key, value in env_backup.items():
-                os.environ[key] = value
-
-        print("[FETCH] Client initialized successfully (guest mode)")
-
-        print(f"[FETCH] Step 3: Fetching forum notes for forum: {forum_id}")
-        # Get forum notes with error handling
-        try:
-            forum_notes = client.get_notes(forum=forum_id)
-            print(f"[FETCH] Successfully fetched {len(forum_notes)} notes")
+            # v2 clients have get_all_notes; v1 has get_notes
+            if hasattr(client, 'get_all_notes'):
+                forum_notes = list(client.get_all_notes(forum=forum_id))
+            else:
+                forum_notes = client.get_notes(forum=forum_id)
         except Exception as api_error:
-            print(f"[FETCH] ERROR during API call: {type(api_error).__name__}: {str(api_error)}")
-            raise ValueError(f"Failed to connect to OpenReview API: {str(api_error)}")
+            print(f"[FETCH]   API call failed: {type(api_error).__name__}: {str(api_error)}")
+            return None
 
         if not forum_notes:
-            print("[FETCH] ERROR: No forum notes returned")
-            raise ValueError(f"No forum found for ID: {forum_id}")
+            print(f"[FETCH]   No notes returned")
+            return None
 
-        # Get submission to extract title
-        print("[FETCH] Step 4: Extracting paper title...")
+        print(f"[FETCH]   Got {len(forum_notes)} notes")
+
+        # Extract title from submission note
         title = "Unknown Paper"
-
-        # Find submission - try different patterns
-        for i, note in enumerate(forum_notes):
-            invitation = getattr(note, 'invitation', '')
-            print(f"[FETCH]   Note {i}: invitation = {invitation[:80]}")
-
-            if any(pattern in invitation for pattern in ['Blind_Submission', '/Submission']):
-                print(f"[FETCH]   Found submission note!")
-                # Try different content access patterns
+        for note in forum_notes:
+            invitations = _get_invitations(note)
+            if any(p in inv for inv in invitations for p in ['Blind_Submission', '/Submission']):
                 content = getattr(note, 'content', {})
-                if isinstance(content, dict):
-                    title = content.get('title', 'Unknown Paper')
-                elif hasattr(content, 'get'):
-                    title = content.get('title', 'Unknown Paper')
-                print(f"[FETCH]   Title extracted: {title[:100]}")
+                t = _get_field(content, 'title')
+                if t:
+                    title = t
+                    print(f"[FETCH]   Title: {title[:80]}")
                 break
 
-        # Extract reviews - try multiple patterns
-        print("[FETCH] Step 5: Extracting reviews...")
+        # Extract reviews
         reviews = []
-        review_id_to_num = {}  # Track note IDs for rebuttal linking
-        review_patterns = ['Official_Review', 'Review', 'review']
-
-        for i, note in enumerate(forum_notes):
-            invitation = getattr(note, 'invitation', '')
-
-            # Check if this is a review note
-            if any(pattern in invitation for pattern in review_patterns):
-                print(f"[FETCH]   Found review note {len(reviews)+1}: {invitation[:80]}")
-                # Try different content access patterns
+        review_id_to_num = {}
+        for note in forum_notes:
+            invitations = _get_invitations(note)
+            if any(p in inv for inv in invitations for p in ['Official_Review', 'Review', 'review']):
                 content = getattr(note, 'content', {})
-                review_text = None
+                text = _get_field(content, 'review', 'Review', 'text', 'content')
+                if text and text.strip():
+                    reviews.append(text.strip())
+                    review_id_to_num[note.id] = len(reviews)
+                    print(f"[FETCH]   Review {len(reviews)} found ({len(text)} chars)")
 
-                # Try different field names
-                for field_name in ['review', 'Review', 'text', 'content']:
-                    if isinstance(content, dict):
-                        review_text = content.get(field_name, '')
-                    elif hasattr(content, 'get'):
-                        review_text = content.get(field_name, '')
+        if not reviews:
+            print(f"[FETCH]   No reviews found — invitations present:")
+            seen = {}
+            for note in forum_notes:
+                for inv in _get_invitations(note):
+                    seen[inv] = seen.get(inv, 0) + 1
+            for inv, count in seen.items():
+                print(f"[FETCH]     {inv}: {count}")
+            return None
 
-                    if review_text and isinstance(review_text, str):
-                        print(f"[FETCH]     Found review text in field: {field_name}")
-                        break
-
-                if review_text and isinstance(review_text, str) and review_text.strip():
-                    reviews.append(review_text.strip())
-                    review_id_to_num[note.id] = len(reviews)  # Map note ID to review number (1-indexed)
-                    print(f"[FETCH]     Review added (length: {len(review_text)} chars)")
-
-        print(f"[FETCH] Step 6: Review extraction complete - found {len(reviews)} reviews")
-
-        # Extract rebuttals - look for author comments/responses
-        print("[FETCH] Step 6b: Extracting author rebuttals...")
+        # Extract rebuttals
         rebuttals_structured = []
         for note in forum_notes:
-            invitation = getattr(note, 'invitation', '')
-            if any(p in invitation for p in ['Official_Comment', 'Author_Comment', 'Comment']):
-                if hasattr(note, 'signatures') and any('Authors' in sig for sig in note.signatures):
+            invitations = _get_invitations(note)
+            if any(p in inv for inv in invitations for p in ['Official_Comment', 'Author_Comment', 'Comment']):
+                sigs = getattr(note, 'signatures', []) or []
+                if any('Authors' in sig for sig in sigs):
                     content = getattr(note, 'content', {})
-                    text = None
-                    for field in ['comment', 'rebuttal', 'title']:
-                        if isinstance(content, dict):
-                            text = content.get(field, '')
-                        if text and isinstance(text, str) and text.strip():
-                            break
+                    text = _get_field(content, 'comment', 'rebuttal', 'title')
                     if text and text.strip():
-                        # Track which review this is replying to (if any)
                         replyto = getattr(note, 'replyto', None)
                         reply_num = review_id_to_num.get(replyto, None)
                         rebuttals_structured.append({"text": text.strip(), "reply_to": reply_num})
 
-        # Serialize as JSON for structured display
         rebuttal_text = json.dumps(rebuttals_structured) if rebuttals_structured else ""
-        print(f"[FETCH] Found {len(rebuttals_structured)} rebuttal(s)")
-
-        if not reviews:
-            print(f"[FETCH] ERROR: No reviews found. Total notes: {len(forum_notes)}")
-            print(f"[FETCH] Invitations in this forum:")
-            invitations = {}
-            for note in forum_notes:
-                inv = getattr(note, 'invitation', 'unknown')
-                invitations[inv] = invitations.get(inv, 0) + 1
-            for inv, count in invitations.items():
-                print(f"[FETCH]   - {inv}: {count} notes")
-
-            raise ValueError(f"No official reviews found for submission {forum_id}. "
-                           f"Found {len(forum_notes)} notes total. "
-                           f"Make sure the link is to a paper with reviews.")
-
-        print(f"[FETCH] SUCCESS: Returning {len(reviews)} reviews, title: {title[:50]}, rebuttal: {len(rebuttal_text)} chars")
+        print(f"[FETCH]   {len(rebuttals_structured)} rebuttal(s) found")
         return reviews, title, rebuttal_text
 
-    except ValueError as ve:
-        print(f"[FETCH] ValueError raised: {str(ve)}")
-        raise
-    except Exception as e:
-        print(f"[FETCH] Unexpected exception: {type(e).__name__}: {str(e)}")
-        import traceback
-        print(f"[FETCH] Traceback: {traceback.format_exc()}")
-        raise Exception(f"Failed to fetch from OpenReview: {str(e)}. "
-                       f"Check your internet connection and verify the forum ID is correct.")
+    _browser_headers = {
+        'Origin': 'https://openreview.net',
+        'Referer': 'https://openreview.net/',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    }
+
+    def _make_clients():
+        """Yield (label, client) pairs to try, with browser headers injected."""
+        # Clear stale env vars so openreview.Client doesn't auto-read them and try (bad) credentials
+        _saved = {k: os.environ.pop(k) for k in ('OPENREVIEW_USERNAME', 'OPENREVIEW_PASSWORD') if k in os.environ}
+        try:
+            for label, baseurl, cls in [
+                ("v2 guest", 'https://api2.openreview.net', openreview.api.OpenReviewClient),
+                ("v1 guest", 'https://api.openreview.net', openreview.Client),
+            ]:
+                try:
+                    client = cls(baseurl=baseurl)
+                    client.headers.update(_browser_headers)
+                    yield label, client
+                except Exception as e:
+                    print(f"[FETCH] {label} client init failed: {e}")
+        finally:
+            os.environ.update(_saved)
+
+    result = None
+    for label, client in _make_clients():
+        print(f"[FETCH] Trying {label}...")
+        result = _fetch_with_client(client, forum_id)
+        if result:
+            print(f"[FETCH] {label} succeeded")
+            break
+
+    if result is None:
+        raise ValueError(
+            f"Could not fetch reviews for '{forum_id}'. "
+            f"This paper's reviews may require an OpenReview account. "
+            f"Set OPENREVIEW_USERNAME and OPENREVIEW_PASSWORD in your environment and restart the app."
+        )
+
+    reviews, title, rebuttal_text = result
+    print(f"[FETCH] SUCCESS: {len(reviews)} reviews, title: {title[:50]}")
+    return reviews, title, rebuttal_text
 

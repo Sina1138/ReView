@@ -127,6 +127,24 @@ def _review_toggle_html() -> str:
                         "Collapse All Reviews")
 
 
+def _jump_buttons_html(active_count: int) -> str:
+    """Generate jump-to buttons [R1] [R2] ... that scroll to each review."""
+    buttons = []
+    for i in range(1, active_count + 1):
+        # Target always-present anchor div (not Gradio components which may be removed from DOM)
+        js = (
+            f"(function(){{var el=document.getElementById('int-review-anchor-{i}');"
+            f"if(el)el.scrollIntoView({{behavior:'smooth',block:'start'}});"
+            f"}})()"
+        )
+        buttons.append(
+            f'<button onclick="{js}" '
+            f'style="{_TOGGLE_BTN_STYLE}font-weight:600;">'
+            f'R{i}</button>'
+        )
+    return " ".join(buttons)
+
+
 
 def _should_break_before(sent: str) -> bool:
     """Detect if a paragraph break should be inserted before this sentence."""
@@ -974,6 +992,20 @@ FETCHING_HTML = """
 <style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
 """
 
+AGREEMENT_PROGRESS_HTML = """
+<div style="padding:14px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:20px;height:20px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+    <span style="font-weight:600;color:#312e81;font-size:0.9em;">Computing agreement in background...</span>
+  </div>
+  <div style="background:#e0e7ff;border-radius:4px;height:5px;margin-top:10px;overflow:hidden;">
+    <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:30%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
+  </div>
+</div>
+<style>@keyframes procspin{to{transform:rotate(360deg);}}@keyframes agrslide{0%{width:15%;margin-left:0;}50%{width:35%;margin-left:50%;}100%{width:15%;margin-left:85%;}}</style>
+"""
+
+
 def _status_html(msg, kind="success"):
     """Generate styled HTML for status messages."""
     styles = {
@@ -1376,13 +1408,67 @@ CUSTOM_CSS = """
 /* Collapsible author response toggle */
 details summary::-webkit-details-marker { display: none; }
 details[open] summary span:first-child { display: inline-block; transform: rotate(90deg); }
+
+/* Smooth scrolling everywhere */
+html, body, .gradio-container, main, .contain { scroll-behavior: smooth !important; }
+
+/* Back to top button */
+#back-to-top-btn {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    padding: 8px 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: white;
+    color: #374151;
+    font-size: 0.82em;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    display: none;
+    transition: opacity 0.2s;
+}
+#back-to-top-btn:hover { background: #f3f4f6; }
+
+/* Zero-height review anchor elements for jump navigation */
+.review-anchor { height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; border: none !important; }
+.review-anchor > * { height: 0 !important; margin: 0 !important; padding: 0 !important; }
 """
 
 with gr.Blocks(
     title="ReView",
     css=CUSTOM_CSS,
     theme=gr.themes.Default(),
-    js="() => { document.querySelector('body').classList.remove('dark'); }",
+    js="""() => {
+        document.querySelector('body').classList.remove('dark');
+        var btn = document.createElement('button');
+        btn.id = 'back-to-top-btn';
+        btn.textContent = '\\u2191 Top';
+        btn.onclick = function() {
+            window.scrollTo({top: 0, behavior: 'smooth'});
+            document.documentElement.scrollTop = 0;
+            document.body.scrollTop = 0;
+            var els = document.querySelectorAll('.gradio-container, main, .contain, .main');
+            for (var i = 0; i < els.length; i++) els[i].scrollTop = 0;
+        };
+        document.body.appendChild(btn);
+        function getMaxScroll() {
+            var y = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0;
+            var els = document.querySelectorAll('.gradio-container, main, .contain, .main');
+            for (var i = 0; i < els.length; i++) {
+                if (els[i].scrollTop > y) y = els[i].scrollTop;
+            }
+            return y;
+        }
+        document.addEventListener('scroll', function() {
+            btn.style.display = getMaxScroll() > 400 ? '' : 'none';
+        }, true);
+        setInterval(function() {
+            btn.style.display = getMaxScroll() > 400 ? '' : 'none';
+        }, 500);
+    }""",
 ) as demo:
     # gr.Markdown("# ReView Interface")
     
@@ -1846,6 +1932,9 @@ with gr.Blocks(
                     interactive=True
                 )
 
+            # Agreement progress bar (inside results_section so it stays visible)
+            agreement_progress_html = gr.HTML("", visible=False)
+
             with gr.Row():
                 most_divergent = gr.HTML(
                     visible=False, value="", label="Most Divergent Opinions",
@@ -1857,42 +1946,48 @@ with gr.Blocks(
             interactive_rebuttal_toggle = gr.HTML(visible=False, value="")
 
             # Review 1 (all display modes + rebuttal)
-            none_text1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=True, value=None)
+            gr.HTML(value='<div id="int-review-anchor-1"></div>', elem_classes=["review-anchor"])
+            none_text1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=True, value=None, elem_id="int-review-1")
             agreement_text1 = gr.HTML(visible=False, value="")
             polarity_text1 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 1", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text1 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 1", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review1 = gr.HTML(visible=False, value="")
 
             # Review 2 (all display modes + rebuttal)
-            none_text2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=False, value=None)
+            gr.HTML(value='<div id="int-review-anchor-2"></div>', elem_classes=["review-anchor"])
+            none_text2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=False, value=None, elem_id="int-review-2")
             agreement_text2 = gr.HTML(visible=False, value="")
             polarity_text2 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 2", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text2 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 2", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review2 = gr.HTML(visible=False, value="")
 
             # Review 3 (all display modes + rebuttal)
-            none_text3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=False, value=None)
+            gr.HTML(value='<div id="int-review-anchor-3"></div>', elem_classes=["review-anchor"])
+            none_text3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=False, value=None, elem_id="int-review-3")
             agreement_text3 = gr.HTML(visible=False, value="")
             polarity_text3 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 3", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text3 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 3", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review3 = gr.HTML(visible=False, value="")
 
             # Review 4 (all display modes + rebuttal)
-            none_text4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=False, value=None)
+            gr.HTML(value='<div id="int-review-anchor-4"></div>', elem_classes=["review-anchor"])
+            none_text4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=False, value=None, elem_id="int-review-4")
             agreement_text4 = gr.HTML(visible=False, value="")
             polarity_text4 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 4", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text4 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 4", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review4 = gr.HTML(visible=False, value="")
 
             # Review 5 (all display modes + rebuttal)
-            none_text5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=False, value=None)
+            gr.HTML(value='<div id="int-review-anchor-5"></div>', elem_classes=["review-anchor"])
+            none_text5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=False, value=None, elem_id="int-review-5")
             agreement_text5 = gr.HTML(visible=False, value="")
             polarity_text5 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 5", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text5 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 5", visible=False, value=None, color_map=topic_color_map)
             rebuttal_for_review5 = gr.HTML(visible=False, value="")
 
             # Review 6 (all display modes + rebuttal)
-            none_text6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=False, value=None)
+            gr.HTML(value='<div id="int-review-anchor-6"></div>', elem_classes=["review-anchor"])
+            none_text6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=False, value=None, elem_id="int-review-6")
             agreement_text6 = gr.HTML(visible=False, value="")
             polarity_text6 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 6", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
             topic_text6 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 6", visible=False, value=None, color_map=topic_color_map)
@@ -1930,7 +2025,7 @@ with gr.Blocks(
                 raise gr.Error("Please paste a valid OpenReview link before fetching.")
             return gr.update(value=FETCHING_HTML, visible=True), gr.update(interactive=False)
 
-        def _show_results_with_rebuttal(rebuttal):
+        def _show_results_with_rebuttal(rebuttal, active_count):
             # Generate per-review rebuttals
             per_review = []
             has_per_review = False
@@ -1944,21 +2039,24 @@ with gr.Blocks(
             general_formatted = format_general_rebuttals(rebuttal or "")
             has_general = bool(general_formatted)
 
-            # Toggle bar: review collapse + rebuttal expand
+            # Toggle bar: jump buttons (left) + collapse toggles (right)
             has_any = has_per_review or has_general
-            toggle_buttons = [_review_toggle_html()]
+            right_buttons = [_review_toggle_html()]
             if has_any:
-                toggle_buttons.append(_rebuttal_toggle_html())
+                right_buttons.append(_rebuttal_toggle_html())
             toggle_bar = (
-                '<div style="display:flex;justify-content:flex-end;gap:8px;">'
-                + "".join(toggle_buttons) + '</div>'
+                '<div style="display:flex;align-items:center;gap:8px;">'
+                '<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
+                + _jump_buttons_html(active_count)
+                + '<span style="flex:1;"></span>'
+                + "".join(right_buttons) + '</div>'
             )
             toggle_update = gr.update(visible=True, value=toggle_bar)
 
             return (
                 gr.update(visible=False),   # input_section
                 gr.update(visible=True),    # results_section
-                gr.update(value="✅ Polarity & Topic ready! Computing agreement in background...", visible=True),
+                gr.update(value=AGREEMENT_PROGRESS_HTML, visible=True),  # agreement_progress_html (in results_section)
                 gr.update(visible=True),    # back_to_input_btn
                 gr.update(visible=False),   # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"], value="No Highlighting"),
@@ -1992,8 +2090,8 @@ with gr.Blocks(
             outputs=_interactive_outputs
         ).success(
             fn=_show_results_with_rebuttal,
-            inputs=[openreview_rebuttal],
-            outputs=[input_section, results_section, status_html, back_to_input_btn, view_results_btn, focus_radio,
+            inputs=[openreview_rebuttal, interactive_review_count],
+            outputs=[input_section, results_section, agreement_progress_html, back_to_input_btn, view_results_btn, focus_radio,
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
@@ -2008,11 +2106,11 @@ with gr.Blocks(
             outputs=_rsa_outputs
         ).success(
             fn=lambda: (
-                gr.update(value="✅ Agreement computation complete!", visible=True),
+                gr.update(value="", visible=False),
                 gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
             ),
             inputs=[],
-            outputs=[status_html, focus_radio]
+            outputs=[agreement_progress_html, focus_radio]
         )
 
         # Process (Paste Reviews): show timer → fast scoring → swap to results → async RSA in background
@@ -2029,8 +2127,8 @@ with gr.Blocks(
             outputs=_interactive_outputs
         ).success(
             fn=_show_results_with_rebuttal,
-            inputs=[paste_rebuttal],
-            outputs=[input_section, results_section, status_html, back_to_input_btn, view_results_btn, focus_radio,
+            inputs=[paste_rebuttal, interactive_review_count],
+            outputs=[input_section, results_section, agreement_progress_html, back_to_input_btn, view_results_btn, focus_radio,
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
@@ -2045,11 +2143,11 @@ with gr.Blocks(
             outputs=_rsa_outputs
         ).success(
             fn=lambda: (
-                gr.update(value="✅ Agreement computation complete!", visible=True),
+                gr.update(value="", visible=False),
                 gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
             ),
             inputs=[],
-            outputs=[status_html, focus_radio]
+            outputs=[agreement_progress_html, focus_radio]
         )
 
         # Top bar: Back to input
