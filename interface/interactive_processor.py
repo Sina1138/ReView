@@ -202,7 +202,8 @@ class InteractiveReviewProcessor:
         self,
         *texts: str,
         rationality: float = 1.0,
-        iterations: int = 1
+        iterations: int = 1,
+        progress_callback=None,
     ) -> Dict:
         """
         Full RSA computation exposing all GLIMPSE math variables.
@@ -231,6 +232,7 @@ class InteractiveReviewProcessor:
             source_texts=list(texts),
             device=str(self.device),
             rationality=rationality,
+            progress_callback=progress_callback,
         )
 
         best_rsa_arr, _, speaker_df, listener_df, _, _, _, consensuality_scores = \

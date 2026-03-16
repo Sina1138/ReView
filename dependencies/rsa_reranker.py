@@ -36,6 +36,7 @@ class RSAReranking:
             batch_size: int = None,  # Auto-detect: 64 for GPU, 32 for CPU
             rationality: int = 1,
             device="cuda",
+            progress_callback=None,
     ):
         """
         :param model: hf model used to compute the likelihoods (supposed to be a seq2seq model), is S0 in the RSA model
@@ -61,6 +62,7 @@ class RSAReranking:
             batch_size = 64 if torch.cuda.is_available() else 32
         self.batch_size = batch_size
         self.rationality = rationality
+        self.progress_callback = progress_callback  # callable(done, total) or None
 
         # Pre-tokenize source texts once to avoid redundant tokenization
         # This significantly speeds up likelihood_matrix computation
@@ -186,7 +188,7 @@ class RSAReranking:
             for i in range(0, len(pairs), self.batch_size)
         ]
 
-        for batch in tqdm(batches):
+        for batch_idx, batch in enumerate(tqdm(batches)):
             # get the source texts and candidates
             source_texts = [pair[2] for pair in batch]
             candidates = [pair[3] for pair in batch]
@@ -200,6 +202,9 @@ class RSAReranking:
             # fill the matrix
             for k, (i, j, _, _) in enumerate(batch):
                 likelihood_matrix[i, j] = likelihoods[k].detach()
+
+            if self.progress_callback:
+                self.progress_callback(batch_idx + 1, len(batches))
 
         return likelihood_matrix
 

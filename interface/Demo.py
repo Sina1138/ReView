@@ -1,4 +1,6 @@
 import sys, os.path
+import threading
+import time
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 from collections import defaultdict
@@ -1295,74 +1297,117 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     )
 
 
-def compute_rsa_in_background(rsa_state: Dict, current_focus: str, progress=gr.Progress()) -> Tuple:
-    """
-    Compute RSA (agreement) in background.
-    Returns updates for agreement HTML sections + summary cards.
-    """
-    if not rsa_state or not rsa_state.get("sentence_lists"):
-        return tuple([gr.update(visible=False, value="") ] * (MAX_INTERACTIVE_REVIEWS + 2))
+def _agreement_progress_html(pct: int, done: int, total: int) -> str:
+    """Progress bar HTML for the agreement computation, with real percentage."""
+    return f"""
+<div style="padding:14px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:20px;height:20px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+    <span style="font-weight:600;color:#312e81;font-size:0.9em;">Computing agreement... {pct}%</span>
+    <span style="font-size:0.78em;color:#6b7280;margin-left:auto;">batch {done}/{total}</span>
+  </div>
+  <div style="background:#e0e7ff;border-radius:4px;height:6px;margin-top:10px;overflow:hidden;">
+    <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
+  </div>
+</div>
+<style>@keyframes procspin{{to{{transform:rotate(360deg);}}}}</style>
+"""
 
-    progress(0.0, desc="Computing agreement (this may take a minute)...")
+
+def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
+    """
+    Generator: streams real progress to agreement_progress_html while RSA runs in a thread,
+    then yields final agreement HTML + summary cards.
+    Outputs: agreement_text1..6, most_common, most_divergent, agreement_progress_html, focus_radio
+    """
+    _empty = tuple([gr.update(visible=False, value="")] * (MAX_INTERACTIVE_REVIEWS + 2)
+                   + [gr.update(visible=False, value=""),
+                      gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True)])
+
+    if not rsa_state or not rsa_state.get("sentence_lists"):
+        yield _empty
+        return
 
     processor = get_interactive_processor()
     sentence_lists = rsa_state["sentence_lists"]
     active_texts = rsa_state["active_texts"]
 
-    try:
-        # Full RSA computation — exposes listener, speaker, best_rsa alongside uniqueness
-        progress(0.50, desc="Running RSA reranking...")
-        rsa_result = processor.predict_rsa_full(*active_texts)
+    # Shared progress state updated by progress_callback from the RSA thread
+    _prog = {"done": 0, "total": 1, "result": None, "error": None}
 
-        uniqueness = rsa_result.get("uniqueness", {}) if rsa_result else {}
-        listener = rsa_result.get("listener", {}) if rsa_result else {}
-        speaker = rsa_result.get("speaker", {}) if rsa_result else {}
+    def _progress_callback(done, total):
+        _prog["done"] = done
+        _prog["total"] = total
 
-        # --- Common Themes (topic+polarity grouping) ---
-        polarity_map = rsa_state.get("polarity_map", {})
-        topic_map = rsa_state.get("topic_map", {})
+    def _run():
+        try:
+            _prog["result"] = processor.predict_rsa_full(*active_texts, progress_callback=_progress_callback)
+        except Exception as e:
+            _prog["error"] = e
 
-        most_common_text = format_common_themes(
-            sentence_lists, polarity_map, topic_map,
-            speaker=speaker, uniqueness=uniqueness, listener=listener,
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Yield progress updates while RSA thread is running
+    _no_op_8 = [gr.update()] * (MAX_INTERACTIVE_REVIEWS + 2)
+    while t.is_alive():
+        done, total = _prog["done"], _prog["total"]
+        pct = int(done / total * 100) if total > 0 else 0
+        yield (*_no_op_8, gr.update(visible=True, value=_agreement_progress_html(pct, done, total)), gr.update())
+        time.sleep(0.4)
+
+    t.join()
+
+    if _prog["error"]:
+        print(f"[RSA ERROR] {type(_prog['error']).__name__}: {_prog['error']}")
+        error_msg = f"❌ Agreement computation failed: {str(_prog['error'])[:100]}"
+        yield (
+            *[gr.update(visible=False, value="")] * MAX_INTERACTIVE_REVIEWS,
+            error_msg, "",
+            gr.update(visible=False, value=""),
+            gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
         )
+        return
 
-        # --- Most Divergent hub (per-review) ---
-        if uniqueness:
-            divergent_per_review = format_divergent_cards(
-                uniqueness, sentence_lists, listener, speaker,
+    rsa_result = _prog["result"] or {}
+    uniqueness = rsa_result.get("uniqueness", {})
+    listener = rsa_result.get("listener", {})
+    speaker = rsa_result.get("speaker", {})
+
+    polarity_map = rsa_state.get("polarity_map", {})
+    topic_map = rsa_state.get("topic_map", {})
+    most_common_text = format_common_themes(
+        sentence_lists, polarity_map, topic_map,
+        speaker=speaker, uniqueness=uniqueness, listener=listener,
+    )
+
+    if uniqueness:
+        divergent_per_review = format_divergent_cards(uniqueness, sentence_lists, listener, speaker)
+    else:
+        divergent_per_review = {}
+
+    show_agreement = current_focus in ("Agreement", "Agreement (Processing)")
+    num_reviews = len(active_texts)
+    agree_out = []
+    for i in range(MAX_INTERACTIVE_REVIEWS):
+        if i < len(sentence_lists):
+            html_val = render_agreement_html(
+                sentence_lists[i], uniqueness, listener, speaker,
+                num_reviews=num_reviews,
+                label=f"Agreement in Review {i + 1}",
             )
+            if i in divergent_per_review:
+                html_val += divergent_per_review[i]
+            agree_out.append(gr.update(visible=show_agreement, value=html_val))
         else:
-            divergent_per_review = {}
+            agree_out.append(gr.update(visible=False, value=""))
 
-        progress(0.90, desc="Formatting agreement results...")
-
-        show_agreement = current_focus in ("Agreement", "Agreement (Processing)")
-        num_reviews = len(active_texts)
-        agree_out = []
-        for i in range(MAX_INTERACTIVE_REVIEWS):
-            if i < len(sentence_lists):
-                html_val = render_agreement_html(
-                    sentence_lists[i], uniqueness, listener, speaker,
-                    num_reviews=num_reviews,
-                    label=f"Agreement in Review {i + 1}",
-                )
-                # Append this review's divergent cards below the agreement text
-                if i in divergent_per_review:
-                    html_val += divergent_per_review[i]
-                agree_out.append(gr.update(visible=show_agreement, value=html_val))
-            else:
-                agree_out.append(gr.update(visible=False, value=""))
-
-        progress(1.0, desc="Agreement computation complete!")
-
-        # most_divergent gets empty string — divergent cards are now per-review
-        return (*agree_out, most_common_text, "")
-
-    except Exception as e:
-        print(f"[RSA ERROR] {type(e).__name__}: {str(e)}")
-        error_msg = f"❌ Agreement computation failed: {str(e)[:100]}"
-        return tuple([gr.update(visible=False, value="")] * MAX_INTERACTIVE_REVIEWS + [error_msg, ""])
+    yield (
+        *agree_out,
+        most_common_text, "",
+        gr.update(visible=False, value=""),
+        gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
+    )
 
 
 
@@ -2017,6 +2062,8 @@ with gr.Blocks(
         _rsa_outputs = [
             agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
             most_common, most_divergent,
+            agreement_progress_html,
+            focus_radio,
         ]
 
         # Fetch OpenReview reviews → show timer → fast process → swap to results → async RSA
@@ -2104,13 +2151,6 @@ with gr.Blocks(
             fn=compute_rsa_in_background,
             inputs=[rsa_computation_state, focus_radio],
             outputs=_rsa_outputs
-        ).success(
-            fn=lambda: (
-                gr.update(value="", visible=False),
-                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
-            ),
-            inputs=[],
-            outputs=[agreement_progress_html, focus_radio]
         )
 
         # Process (Paste Reviews): show timer → fast scoring → swap to results → async RSA in background
@@ -2141,13 +2181,6 @@ with gr.Blocks(
             fn=compute_rsa_in_background,
             inputs=[rsa_computation_state, focus_radio],
             outputs=_rsa_outputs
-        ).success(
-            fn=lambda: (
-                gr.update(value="", visible=False),
-                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement"], interactive=True),
-            ),
-            inputs=[],
-            outputs=[agreement_progress_html, focus_radio]
         )
 
         # Top bar: Back to input
