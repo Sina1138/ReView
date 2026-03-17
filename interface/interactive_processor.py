@@ -5,6 +5,7 @@ Aligns interactive review processing with the preprocessed pipeline.
 
 import sys
 import os
+import time
 from pathlib import Path
 import torch
 import math
@@ -51,8 +52,10 @@ class InteractiveReviewProcessor:
     def __init__(self, device: str = "cuda"):
         """Initialize processor with all required models."""
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        t_total = time.time()
 
         # Load summarization model (for RSA)
+        t0 = time.time()
         rsa_model_name = "sshleifer/distilbart-cnn-12-3"
         self.rsa_model = AutoModelForSeq2SeqLM.from_pretrained(
             rsa_model_name,
@@ -64,10 +67,12 @@ class InteractiveReviewProcessor:
         self.rsa_model.to(self.device)
         self.rsa_model = _try_bettertransformer(self.rsa_model)
         self.rsa_model.eval()
+        print(f"[TIMING] RSA model loaded in {time.time() - t0:.1f}s")
 
         # Load polarity model
         # Option A (Feb 2026): DeBERTa-v3-base for +5.5% F1 improvement (0.764 vs 0.724 SciBERT)
         # Try local trained model first, fall back to HuggingFace
+        t0 = time.time()
         polarity_model_local = BASE_DIR / "training" / "outputs" / "deberta_polarity" / "final_model"
         if polarity_model_local.exists() and (polarity_model_local / "config.json").exists():
             polarity_model_name = str(polarity_model_local)
@@ -80,11 +85,12 @@ class InteractiveReviewProcessor:
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
         self.polarity_model.to(self.device)
-        self.polarity_model = _try_bettertransformer(self.polarity_model)
         self.polarity_model.eval()
+        print(f"[TIMING] Polarity model loaded in {time.time() - t0:.1f}s")
 
         # Load topic model
         # SciDeBERTa maintains best performance (F1=0.478)
+        t0 = time.time()
         topic_model_local = BASE_DIR / "training" / "outputs" / "scideberta_topic" / "final_model"
         if topic_model_local.exists() and (topic_model_local / "config.json").exists():
             topic_model_name = str(topic_model_local)
@@ -96,8 +102,9 @@ class InteractiveReviewProcessor:
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
         self.topic_model.to(self.device)
-        self.topic_model = _try_bettertransformer(self.topic_model)
         self.topic_model.eval()
+        print(f"[TIMING] Topic model loaded in {time.time() - t0:.1f}s")
+        print(f"[TIMING] All models loaded in {time.time() - t_total:.1f}s")
 
         # Topic ID to label mapping
         self.id2topic = {
@@ -125,7 +132,7 @@ class InteractiveReviewProcessor:
             scores = scores * 0
         return scores
 
-    def predict_polarity(self, sentences: List[str]) -> Dict[str, Optional[str]]:
+    def predict_polarity(self, sentences: List[str], batch_size: int = 32) -> Dict[str, Optional[str]]:
         """
         Predict polarity for sentences.
         Returns: {sentence: "➕" | "➖" | None}
@@ -133,22 +140,29 @@ class InteractiveReviewProcessor:
         if not sentences:
             return {}
 
-        inputs = self.polarity_tokenizer(
-            sentences,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=256  # Reduced from 512 — individual sentences rarely exceed 256 tokens
-        ).to(self.device)
+        t0 = time.time()
+        n_batches = (len(sentences) + batch_size - 1) // batch_size
+        print(f"[TIMING] Polarity: {len(sentences)} sentences, {n_batches} batches")
+        all_preds = []
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i + batch_size]
+            inputs = self.polarity_tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=256
+            ).to(self.device)
 
-        with torch.no_grad():
-            logits = self.polarity_model(**inputs).logits
-            preds = torch.argmax(logits, dim=1).cpu().tolist()
+            with torch.no_grad():
+                logits = self.polarity_model(**inputs).logits
+                all_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
 
+        print(f"[TIMING] Polarity done in {time.time() - t0:.1f}s")
         emoji_map = {0: "➖", 1: None, 2: "➕"}
-        return dict(zip(sentences, [emoji_map.get(p, None) for p in preds]))
+        return dict(zip(sentences, [emoji_map.get(p, None) for p in all_preds]))
 
-    def predict_topic(self, sentences: List[str]) -> Dict[str, Optional[str]]:
+    def predict_topic(self, sentences: List[str], batch_size: int = 32) -> Dict[str, Optional[str]]:
         """
         Predict topic for sentences.
         Returns: {sentence: topic_label | None}
@@ -156,19 +170,26 @@ class InteractiveReviewProcessor:
         if not sentences:
             return {}
 
-        inputs = self.topic_tokenizer(
-            sentences,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=256  # Reduced from 512 — individual sentences rarely exceed 256 tokens
-        ).to(self.device)
+        t0 = time.time()
+        n_batches = (len(sentences) + batch_size - 1) // batch_size
+        print(f"[TIMING] Topic: {len(sentences)} sentences, {n_batches} batches")
+        all_preds = []
+        for i in range(0, len(sentences), batch_size):
+            batch = sentences[i:i + batch_size]
+            inputs = self.topic_tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=256
+            ).to(self.device)
 
-        with torch.no_grad():
-            logits = self.topic_model(**inputs).logits
-            preds = torch.argmax(logits, dim=1).cpu().tolist()
+            with torch.no_grad():
+                logits = self.topic_model(**inputs).logits
+                all_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
 
-        return dict(zip(sentences, [self.id2topic.get(p, None) for p in preds]))
+        print(f"[TIMING] Topic done in {time.time() - t0:.1f}s")
+        return dict(zip(sentences, [self.id2topic.get(p, None) for p in all_preds]))
 
     def predict_consensuality(
         self,

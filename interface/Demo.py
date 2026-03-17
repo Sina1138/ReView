@@ -1284,8 +1284,10 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     RSA (agreement) runs in background.
     Returns immediately with placeholder agreement sections that update when ready.
     """
+    import time as _time
     from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
+    t_start = _time.time()
     all_texts = [text1, text2, text3, text4, text5, text6]
     active_texts = [t for t in all_texts if t and t.strip()]
 
@@ -1294,29 +1296,35 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
 
     # Step 1: Load models
     progress(0.0, desc="Loading models...")
+    t0 = _time.time()
     processor = get_interactive_processor()
+    print(f"[TIMING] get_interactive_processor: {_time.time() - t0:.1f}s")
 
     # Step 2: Tokenize
     progress(0.10, desc="Tokenizing reviews...")
+    t0 = _time.time()
     sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in active_texts]
     sentence_lists = [sl for sl in sentence_lists if sl]
+    print(f"[TIMING] Tokenization: {_time.time() - t0:.1f}s ({sum(len(sl) for sl in sentence_lists)} total sentences)")
 
     if len(sentence_lists) < 2:
         raise ValueError("At least two reviews must have valid sentences")
 
+    t0 = _time.time()
     all_sentences = filter_and_clean_sentences(
         list(set(s for sl in sentence_lists for s in sl))
     )
+    print(f"[TIMING] filter_and_clean: {_time.time() - t0:.1f}s ({len(all_sentences)} unique sentences)")
 
     # Step 3-4: Polarity + Topic (parallelize both models)
     progress(0.30, desc="Predicting polarity and topics (parallel)...")
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        polarity_future = executor.submit(processor.predict_polarity, all_sentences)
-        topic_future = executor.submit(processor.predict_topic, all_sentences)
-        polarity_map = polarity_future.result()
-        topic_map = topic_future.result()
+    t0 = _time.time()
+    polarity_map = processor.predict_polarity(all_sentences)
+    topic_map = processor.predict_topic(all_sentences)
+    print(f"[TIMING] Polarity+Topic (sequential): {_time.time() - t0:.1f}s")
+    print(f"[TIMING] Fast processing total: {_time.time() - t_start:.1f}s")
 
     # Step 5: Format results as HTML with collapsible review cards
     progress(0.90, desc="Formatting results...")
