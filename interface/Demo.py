@@ -96,7 +96,8 @@ def _get_context(sentence: str, sentence_lists: list):
 _TOGGLE_BTN_STYLE = (
     'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
     'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
-    'line-height:1.4;height:28px;box-sizing:border-box;vertical-align:middle;'
+    'line-height:1;height:28px;box-sizing:border-box;vertical-align:middle;'
+    'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;'
 )
 
 def _toggle_html(selector: str, text_when_all_open: str,
@@ -1581,6 +1582,19 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 }
 #back-to-top-btn:hover { background: #f3f4f6; }
 
+/* Paper title heading style for interactive tab */
+.paper-title-heading textarea {
+    font-size: 1.17em !important;
+    font-weight: 700 !important;
+    color: #1f2937 !important;
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    line-height: 1.3 !important;
+    min-height: 0 !important;
+}
+.paper-title-heading { padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
+
 /* Zero-height review anchor elements for jump navigation */
 .review-anchor { height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; border: none !important; }
 .review-anchor > * { height: 0 !important; margin: 0 !important; padding: 0 !important; }
@@ -1922,11 +1936,11 @@ with gr.Blocks(
                 toggle_buttons.append(_rebuttal_toggle_html())
             jump_html = _jump_buttons_html(number_of_displayed_reviews, prefix="pre")
             toggle_bar_html = (
-                '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-                f'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:0.8em;color:#6b7280;">Jump to:</span>{jump_html}</div>'
-                '<div style="display:flex;gap:8px;">'
-                + "".join(toggle_buttons)
-                + '</div></div>'
+                '<div style="display:flex;align-items:center;gap:8px;">'
+                f'<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
+                + jump_html
+                + '<span style="flex:1;"></span>'
+                + "".join(toggle_buttons) + '</div>'
             )
             toggle_bar_update = gr.update(visible=True, value=toggle_bar_html)
 
@@ -2066,8 +2080,8 @@ with gr.Blocks(
 
         # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
+            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False, elem_classes=["paper-title-heading"])
             back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
-            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False)
             view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
         # ---- INPUT SECTION (full-width, visible initially) ----
@@ -2266,13 +2280,13 @@ with gr.Blocks(
                 + "".join(right_buttons) + '</div>'
             )
 
-            title_text = f"📄 {title.strip()}" if title and title.strip() else ""
+            title_text = title.strip() if title and title.strip() else ""
             return (
                 *none_out,                                              # none_text1..6
                 gr.update(visible=False),                              # input_section
                 gr.update(visible=True),                               # results_section
                 gr.update(visible=True),                               # back_to_input_btn
-                gr.update(visible=bool(title_text), value=title_text), # paper_title_html (Textbox)
+                gr.update(visible=bool(title_text), value=title_text), # paper_title_html
                 gr.update(visible=False),                              # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity ⏳", "Topic ⏳", "Agreement ⏳"],
                            value="No Highlighting", interactive=True), # focus_radio
@@ -2432,10 +2446,11 @@ with gr.Blocks(
                 gr.update(visible=False),   # hide input
                 gr.update(visible=True),    # show results
                 gr.update(visible=True),    # show "back to input"
+                gr.update(visible=True),    # show paper title
                 gr.update(visible=False),   # hide "view results"
             ),
             inputs=[],
-            outputs=[input_section, results_section, back_to_input_btn, view_results_btn]
+            outputs=[input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn]
         )
 
         # Clear button
