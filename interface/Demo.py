@@ -96,7 +96,7 @@ def _get_context(sentence: str, sentence_lists: list):
 _TOGGLE_BTN_STYLE = (
     'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
     'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
-    'line-height:1.4;height:28px;box-sizing:border-box;'
+    'line-height:1.4;height:28px;box-sizing:border-box;vertical-align:middle;'
 )
 
 def _toggle_html(selector: str, text_when_all_open: str,
@@ -129,13 +129,14 @@ def _review_toggle_html() -> str:
                         "Collapse All Reviews")
 
 
-def _jump_buttons_html(active_count: int) -> str:
-    """Generate jump-to buttons [R1] [R2] ... that scroll to each review."""
+def _jump_buttons_html(active_count: int, prefix: str = "int") -> str:
+    """Generate jump-to buttons [R1] [R2] ... that scroll to each review.
+    prefix: 'int' for interactive tab, 'pre' for pre-processed tab."""
     buttons = []
     for i in range(1, active_count + 1):
-        # Target always-present anchor div (not Gradio components which may be removed from DOM)
+        anchor_id = f"{prefix}-review-anchor-{i}"
         js = (
-            f"(function(){{var el=document.getElementById('int-review-anchor-{i}');"
+            f"(function(){{var el=document.getElementById('{anchor_id}');"
             f"if(el)el.scrollIntoView({{behavior:'smooth',block:'start'}});"
             f"}})()"
         )
@@ -144,7 +145,7 @@ def _jump_buttons_html(active_count: int) -> str:
             f'style="{_TOGGLE_BTN_STYLE}font-weight:600;">'
             f'R{i}</button>'
         )
-    return " ".join(buttons)
+    return "".join(buttons)
 
 
 
@@ -181,7 +182,10 @@ def _is_review_header(sent: str) -> bool:
 
 
 # ---- Polarity / Topic color maps for HTML rendering ----
-_POLARITY_COLORS = {2: "#d4fcd6", 0: "#fcd6d6"}  # positive=green, negative=red
+_POLARITY_COLORS = {
+    2: "#d4fcd6", 0: "#fcd6d6",        # integer keys (pre-processed tab)
+    "➕": "#d4fcd6", "➖": "#fcd6d6",   # emoji keys (interactive tab)
+}  # positive=green, negative=red
 _TOPIC_HTML_COLORS = {
     "Substance": "#b3e5fc",
     "Clarity": "#c8e6c9",
@@ -1036,7 +1040,6 @@ POLARITY_PROGRESS_HTML = """
     </div>
   </div>
 </div>
-<style>@keyframes procspin{to{transform:rotate(360deg);}}@keyframes agrslide{0%{width:15%;margin-left:0;}50%{width:35%;margin-left:50%;}100%{width:15%;margin-left:85%;}}</style>
 """
 
 AGREEMENT_PROGRESS_HTML = """
@@ -1049,7 +1052,6 @@ AGREEMENT_PROGRESS_HTML = """
     </div>
   </div>
 </div>
-<style>@keyframes procspin{to{transform:rotate(360deg);}}@keyframes agrslide{0%{width:15%;margin-left:0;}50%{width:35%;margin-left:50%;}100%{width:15%;margin-left:85%;}}</style>
 """
 
 
@@ -1389,7 +1391,6 @@ def _agreement_progress_html(pct: int, done: int, total: int,
     return f"""
 <div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:18px;height:18px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
     <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement: {pct}%</span>
     <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
       <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
@@ -1397,7 +1398,6 @@ def _agreement_progress_html(pct: int, done: int, total: int,
     <span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">{info}</span>
   </div>
 </div>
-<style>@keyframes procspin{{to{{transform:rotate(360deg);}}}}</style>
 """
 
 
@@ -1589,8 +1589,14 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 .results-compact { gap: 4px !important; }
 
 
-/* Remove Gradio wrapper spacing around progress bars */
-.progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+/* Progress bar group — zero internal spacing, collapses when both children hidden */
+.progress-group, .progress-group > * {
+    gap: 0 !important; padding: 0 !important; margin: 0 !important;
+    border: none !important; box-shadow: none !important;
+    border-radius: 0 !important; min-height: 0 !important;
+}
+/* Remove Gradio wrapper spacing around individual progress bars */
+.progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; min-height: 0 !important; }
 /* Suppress Gradio's loading/progress indicator on progress bar components */
 .progress-compact .progress-bar, .progress-compact .eta-bar,
 .progress-compact > .wrap, .progress-compact .generating { display: none !important; }
@@ -1600,6 +1606,10 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 
 /* Remove the border/separator line around the display mode radio row */
 .no-border-row { border: none !important; box-shadow: none !important; padding: 0 !important; margin-bottom: 0 !important; }
+
+/* Progress bar animations — global so they survive HTML replacement in generators */
+@keyframes procspin { to { transform: rotate(360deg); } }
+@keyframes agrslide { 0% { width:15%; margin-left:0; } 50% { width:35%; margin-left:50%; } 100% { width:15%; margin-left:85%; } }
 """
 
 with gr.Blocks(
@@ -1633,6 +1643,25 @@ with gr.Blocks(
         setInterval(function() {
             btn.style.display = getMaxScroll() > 400 ? '' : 'none';
         }, 500);
+
+        /* Gray-out and prevent selection of radio choices containing ⏳ */
+        var _prevRadio = 'No Highlighting';
+        setInterval(function() {
+            var labels = document.querySelectorAll('.no-border-row label input[type=radio]');
+            labels.forEach(function(inp) {
+                var lbl = inp.closest('label') || inp.parentElement;
+                var txt = (lbl && lbl.textContent) || '';
+                if (txt.indexOf('⏳') !== -1) {
+                    lbl.style.opacity = '0.4';
+                    lbl.style.pointerEvents = 'none';
+                    lbl.title = 'Still computing…';
+                } else {
+                    lbl.style.opacity = '';
+                    lbl.style.pointerEvents = '';
+                    lbl.title = '';
+                }
+            });
+        }, 300);
     }""",
 ) as demo:
     # gr.Markdown("# ReView Interface")
@@ -1891,10 +1920,13 @@ with gr.Blocks(
             toggle_buttons = [_review_toggle_html()]
             if has_any_rebuttal:
                 toggle_buttons.append(_rebuttal_toggle_html())
+            jump_html = _jump_buttons_html(number_of_displayed_reviews, prefix="pre")
             toggle_bar_html = (
-                '<div style="display:flex;justify-content:flex-end;gap:8px;">'
+                '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+                f'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:0.8em;color:#6b7280;">Jump to:</span>{jump_html}</div>'
+                '<div style="display:flex;gap:8px;">'
                 + "".join(toggle_buttons)
-                + '</div>'
+                + '</div></div>'
             )
             toggle_bar_update = gr.update(visible=True, value=toggle_bar_html)
 
@@ -1952,36 +1984,44 @@ with gr.Blocks(
         # Topic color legend (HTML version)
         topic_text_box = gr.HTML(visible=False, value="")
         
-        with gr.Row():
-            gr.Markdown("### 📝 Reviews", elem_classes=["review-section-header"])
-            prep_toggle_bar = gr.HTML(visible=False, value="")
+        prep_toggle_bar = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-1"></div>', elem_classes=["review-anchor"])
         review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
         prep_agreement1 = gr.HTML(visible=False, value="")
         prep_rebuttal1 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-2"></div>', elem_classes=["review-anchor"])
         review2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=number_of_displayed_reviews >= 2, key="initial_review2")
         prep_agreement2 = gr.HTML(visible=False, value="")
         prep_rebuttal2 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-3"></div>', elem_classes=["review-anchor"])
         review3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=number_of_displayed_reviews >= 3, key="initial_review3")
         prep_agreement3 = gr.HTML(visible=False, value="")
         prep_rebuttal3 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-4"></div>', elem_classes=["review-anchor"])
         review4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=number_of_displayed_reviews >= 4, key="initial_review4")
         prep_agreement4 = gr.HTML(visible=False, value="")
         prep_rebuttal4 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-5"></div>', elem_classes=["review-anchor"])
         review5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=number_of_displayed_reviews >= 5, key="initial_review5")
         prep_agreement5 = gr.HTML(visible=False, value="")
         prep_rebuttal5 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-6"></div>', elem_classes=["review-anchor"])
         review6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=number_of_displayed_reviews >= 6, key="initial_review6")
         prep_agreement6 = gr.HTML(visible=False, value="")
         prep_rebuttal6 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-7"></div>', elem_classes=["review-anchor"])
         review7 = gr.HighlightedText(show_legend=False, label="📝 Review 7", visible=number_of_displayed_reviews >= 7, key="initial_review7")
         prep_agreement7 = gr.HTML(visible=False, value="")
         prep_rebuttal7 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-8"></div>', elem_classes=["review-anchor"])
         review8 = gr.HighlightedText(show_legend=False, label="📝 Review 8", visible=number_of_displayed_reviews >= 8, key="initial_review8")
         prep_agreement8 = gr.HTML(visible=False, value="")
         prep_rebuttal8 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-9"></div>', elem_classes=["review-anchor"])
         review9 = gr.HighlightedText(show_legend=False, label="📝 Review 9", visible=number_of_displayed_reviews >= 9, key="initial_review9")
         prep_agreement9 = gr.HTML(visible=False, value="")
         prep_rebuttal9 = gr.HTML(visible=False, value="")
+        gr.HTML(value='<div id="pre-review-anchor-10"></div>', elem_classes=["review-anchor"])
         review10 = gr.HighlightedText(show_legend=False, label="📝 Review 10", visible=number_of_displayed_reviews >= 10, key="initial_review10")
         prep_agreement10 = gr.HTML(visible=False, value="")
         prep_rebuttal10 = gr.HTML(visible=False, value="")
@@ -2076,9 +2116,13 @@ with gr.Blocks(
                     interactive=True
                 )
 
-            # Progress bars (directly in results_section — no wrapper column, so they vanish completely when hidden)
-            polarity_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
-            agreement_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+            # Progress bars in a zero-gap group so they sit flush against each other
+            with gr.Group(elem_classes=["progress-group"]):
+                polarity_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+                agreement_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+
+            # Color legend for polarity/topic modes (hidden by default, shown by toggle_display_mode)
+            interactive_legend_html = gr.HTML("", visible=False)
 
             with gr.Row():
                 most_divergent = gr.HTML(
@@ -2436,6 +2480,24 @@ with gr.Blocks(
                      polarity_progress_html, agreement_progress_html]
         )
 
+        # Color legend HTML snippets for polarity/topic modes
+        _POLARITY_LEGEND = (
+            '<div style="display:flex;gap:12px;align-items:center;padding:8px 0;font-size:0.8em;">'
+            '<span style="background:#d4fcd6;padding:2px 8px;border-radius:4px;">Positive</span>'
+            '<span style="background:#fcd6d6;padding:2px 8px;border-radius:4px;">Negative</span>'
+            '<span style="color:#9ca3af;">Neutral (no highlight)</span>'
+            '</div>'
+        )
+        _TOPIC_LEGEND = (
+            '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:8px 0;">'
+            + " ".join(
+                f'<span style="background:{color};padding:2px 8px;border-radius:4px;'
+                f'font-size:0.8em;margin-right:4px;">{_html.escape(name)}</span>'
+                for name, color in _TOPIC_HTML_COLORS.items()
+            )
+            + '</div>'
+        )
+
         # Toggle display mode (No Highlighting / Polarity / Topic / Agreement[Processing])
         def toggle_display_mode(focus, active_count):
             # Strip ⏳ loading suffix — treat "Polarity ⏳" as "Polarity", etc.
@@ -2454,6 +2516,14 @@ with gr.Blocks(
             updates.append(gr.update(visible=False))  # most_divergent (per-review now, always hidden)
             updates.append(gr.update(visible=show_opinions))  # most_common
 
+            # Color legend
+            if effective_focus == "Polarity":
+                updates.append(gr.update(visible=True, value=_POLARITY_LEGEND))
+            elif effective_focus == "Topic":
+                updates.append(gr.update(visible=True, value=_TOPIC_LEGEND))
+            else:
+                updates.append(gr.update(visible=False, value=""))
+
             return tuple(updates)
 
         focus_radio.change(
@@ -2465,6 +2535,7 @@ with gr.Blocks(
                 topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
                 agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
                 most_divergent, most_common,
+                interactive_legend_html,
             ]
         )
 
