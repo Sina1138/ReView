@@ -998,7 +998,7 @@ POLARITY_PROGRESS_HTML = """
 <div style="padding:10px 16px;background:#f0fff4;border-radius:8px;border:1px solid #bbf7d0;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
     <div style="width:18px;height:18px;border:3px solid #dcfce7;border-top:3px solid #16a34a;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic...</span>
+    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic: </span>
     <div style="flex:1;background:#dcfce7;border-radius:4px;height:6px;overflow:hidden;">
       <div style="background:linear-gradient(90deg,#4ade80,#16a34a);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
     </div>
@@ -1227,7 +1227,7 @@ def format_general_rebuttals(rebuttal: str) -> str:
     )
 
 
-def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, progress=gr.Progress()) -> Tuple:
+def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, rebuttal_str: str = "", progress=gr.Progress()) -> Tuple:
     """
     Fast processing: Polarity + Topic only (~3-5 sec on CPU).
     RSA (agreement) runs in background.
@@ -1267,27 +1267,36 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
         polarity_map = polarity_future.result()
         topic_map = topic_future.result()
 
-    # Step 5: Format results (no consensuality yet - it's computing in background)
+    # Step 5: Format results as HTML with collapsible review cards
     progress(0.90, desc="Formatting results...")
 
-    consensuality_map = {}  # Empty - will be filled by async RSA
+    # Pre-compute per-review rebuttal HTML (embedded inside each card, like pre-processed tab)
+    rebuttal_htmls = [format_rebuttal_for_review(rebuttal_str or "", i + 1) for i in range(MAX_INTERACTIVE_REVIEWS)]
 
-    fmt = processor.format_highlighted_output
-    # Build per-review outputs (pad inactive reviews with empty/hidden)
+    # Build per-review outputs as HTML (same format as pre-processed tab)
     none_out, agree_out, polar_out, topic_out = [], [], [], []
     for i in range(MAX_INTERACTIVE_REVIEWS):
         if i < len(sentence_lists):
-            # No Highlighting mode: show original text without any highlighting
-            none_out.append(gr.update(visible=True, value=fmt(sentence_lists[i], {}, "none")))
-            # Agreement section shows empty placeholder (RSA fills in async)
+            review_label = f"Review {i + 1}"
+            reb = rebuttal_htmls[i]
+            # Build (sentence, metadata) tuples for render_review_html
+            plain_items = [(s, {}) for s in sentence_lists[i]]
+            polar_items = [(s, {"polarity": polarity_map.get(s)}) for s in sentence_lists[i]]
+            topic_items = [(s, {"topic": topic_map.get(s)}) for s in sentence_lists[i]]
+
+            none_html = _wrap_review_card(review_label, f"{render_review_html(plain_items, mode='plain', label='')}{reb}", collapsible=True)
+            polar_html = _wrap_review_card(review_label, f"{render_review_html(polar_items, mode='polarity', label='')}{reb}", collapsible=True)
+            topic_html = _wrap_review_card(review_label, f"{render_review_html(topic_items, mode='topic', label='')}{reb}", collapsible=True)
+
+            none_out.append(gr.update(visible=True, value=none_html))
             agree_out.append(gr.update(visible=False, value=""))
-            polar_out.append(gr.update(visible=False, value=fmt(sentence_lists[i], polarity_map, "polarity")))
-            topic_out.append(gr.update(visible=False, value=fmt(sentence_lists[i], topic_map, "topic")))
+            polar_out.append(gr.update(visible=False, value=polar_html))
+            topic_out.append(gr.update(visible=False, value=topic_html))
         else:
-            none_out.append(gr.update(visible=False, value=None))
+            none_out.append(gr.update(visible=False, value=""))
             agree_out.append(gr.update(visible=False, value=""))
-            polar_out.append(gr.update(visible=False, value=None))
-            topic_out.append(gr.update(visible=False, value=None))
+            polar_out.append(gr.update(visible=False, value=""))
+            topic_out.append(gr.update(visible=False, value=""))
 
     progress(1.0, desc="Done! Computing agreement in background...")
 
@@ -1297,6 +1306,7 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
         "active_texts": active_texts,
         "polarity_map": polarity_map,
         "topic_map": topic_map,
+        "rebuttal_str": rebuttal_str or "",
     }
 
     return (
@@ -1332,7 +1342,7 @@ def _agreement_progress_html(pct: int, done: int, total: int,
 <div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
     <div style="width:18px;height:18px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement... {pct}%</span>
+    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement: {pct}%</span>
     <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
       <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
     </div>
@@ -1428,16 +1438,23 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
 
     show_agreement = current_focus in ("Agreement", "Agreement (Processing)")
     num_reviews = len(active_texts)
+
+    # Pre-compute per-review rebuttal HTML (embedded inside agreement cards)
+    rebuttal_str = rsa_state.get("rebuttal_str", "")
+    rebuttal_htmls = [format_rebuttal_for_review(rebuttal_str, i + 1) for i in range(MAX_INTERACTIVE_REVIEWS)]
+
     agree_out = []
     for i in range(MAX_INTERACTIVE_REVIEWS):
         if i < len(sentence_lists):
-            html_val = render_agreement_html(
+            # Get raw agreement content (no wrapping — we wrap manually to include rebuttal)
+            agreement_content = render_agreement_html(
                 sentence_lists[i], uniqueness, listener, speaker,
                 num_reviews=num_reviews,
-                label=f"Agreement in Review {i + 1}",
+                label="",  # no wrapping inside render_agreement_html
             )
-            if i in divergent_per_review:
-                html_val += divergent_per_review[i]
+            div = divergent_per_review.get(i, "")
+            reb = rebuttal_htmls[i]
+            html_val = _wrap_review_card(f"Agreement in Review {i + 1}", f"{agreement_content}{div}{reb}", collapsible=True)
             agree_out.append(gr.update(visible=show_agreement, value=html_val))
         else:
             agree_out.append(gr.update(visible=False, value=""))
@@ -1524,6 +1541,7 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 /* Tighter vertical spacing in results section */
 .results-compact { gap: 4px !important; }
 
+
 /* Remove Gradio wrapper spacing around progress bars */
 .progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; }
 /* Suppress Gradio's loading/progress indicator on progress bar components */
@@ -1579,7 +1597,7 @@ with gr.Blocks(
     # -----------------------------------
     # Pre-processed Tab
     # -----------------------------------
-    with gr.Tab("Pre-processed Reviews"):
+    with gr.Tab("Pre-processed Reviews", elem_classes=["results-compact"]):
         # Initialize state for this session.
         if not years:
             raise ValueError("No years available in new dataset")
@@ -2047,52 +2065,52 @@ with gr.Blocks(
 
             interactive_rebuttal_toggle = gr.HTML(visible=False, value="")
 
-            # Review 1 (all display modes + rebuttal)
+            # Review 1 (all display modes as HTML + rebuttal)
             gr.HTML(value='<div id="int-review-anchor-1"></div>', elem_classes=["review-anchor"])
-            none_text1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=True, value=None, elem_id="int-review-1")
+            none_text1 = gr.HTML(visible=True, value="", elem_id="int-review-1")
             agreement_text1 = gr.HTML(visible=False, value="")
-            polarity_text1 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 1", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text1 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 1", visible=False, value=None, color_map=topic_color_map)
+            polarity_text1 = gr.HTML(visible=False, value="")
+            topic_text1 = gr.HTML(visible=False, value="")
             rebuttal_for_review1 = gr.HTML(visible=False, value="")
 
-            # Review 2 (all display modes + rebuttal)
+            # Review 2
             gr.HTML(value='<div id="int-review-anchor-2"></div>', elem_classes=["review-anchor"])
-            none_text2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=False, value=None, elem_id="int-review-2")
+            none_text2 = gr.HTML(visible=False, value="", elem_id="int-review-2")
             agreement_text2 = gr.HTML(visible=False, value="")
-            polarity_text2 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 2", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text2 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 2", visible=False, value=None, color_map=topic_color_map)
+            polarity_text2 = gr.HTML(visible=False, value="")
+            topic_text2 = gr.HTML(visible=False, value="")
             rebuttal_for_review2 = gr.HTML(visible=False, value="")
 
-            # Review 3 (all display modes + rebuttal)
+            # Review 3
             gr.HTML(value='<div id="int-review-anchor-3"></div>', elem_classes=["review-anchor"])
-            none_text3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=False, value=None, elem_id="int-review-3")
+            none_text3 = gr.HTML(visible=False, value="", elem_id="int-review-3")
             agreement_text3 = gr.HTML(visible=False, value="")
-            polarity_text3 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 3", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text3 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 3", visible=False, value=None, color_map=topic_color_map)
+            polarity_text3 = gr.HTML(visible=False, value="")
+            topic_text3 = gr.HTML(visible=False, value="")
             rebuttal_for_review3 = gr.HTML(visible=False, value="")
 
-            # Review 4 (all display modes + rebuttal)
+            # Review 4
             gr.HTML(value='<div id="int-review-anchor-4"></div>', elem_classes=["review-anchor"])
-            none_text4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=False, value=None, elem_id="int-review-4")
+            none_text4 = gr.HTML(visible=False, value="", elem_id="int-review-4")
             agreement_text4 = gr.HTML(visible=False, value="")
-            polarity_text4 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 4", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text4 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 4", visible=False, value=None, color_map=topic_color_map)
+            polarity_text4 = gr.HTML(visible=False, value="")
+            topic_text4 = gr.HTML(visible=False, value="")
             rebuttal_for_review4 = gr.HTML(visible=False, value="")
 
-            # Review 5 (all display modes + rebuttal)
+            # Review 5
             gr.HTML(value='<div id="int-review-anchor-5"></div>', elem_classes=["review-anchor"])
-            none_text5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=False, value=None, elem_id="int-review-5")
+            none_text5 = gr.HTML(visible=False, value="", elem_id="int-review-5")
             agreement_text5 = gr.HTML(visible=False, value="")
-            polarity_text5 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 5", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text5 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 5", visible=False, value=None, color_map=topic_color_map)
+            polarity_text5 = gr.HTML(visible=False, value="")
+            topic_text5 = gr.HTML(visible=False, value="")
             rebuttal_for_review5 = gr.HTML(visible=False, value="")
 
-            # Review 6 (all display modes + rebuttal)
+            # Review 6
             gr.HTML(value='<div id="int-review-anchor-6"></div>', elem_classes=["review-anchor"])
-            none_text6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=False, value=None, elem_id="int-review-6")
+            none_text6 = gr.HTML(visible=False, value="", elem_id="int-review-6")
             agreement_text6 = gr.HTML(visible=False, value="")
-            polarity_text6 = gr.HighlightedText(show_legend=True, label="Polarity in 📝 Review 6", visible=False, value=None, color_map={"➕": "#d4fcd6", "➖": "#fcd6d6"})
-            topic_text6 = gr.HighlightedText(show_legend=False, label="Topic in 📝 Review 6", visible=False, value=None, color_map=topic_color_map)
+            polarity_text6 = gr.HTML(visible=False, value="")
+            topic_text6 = gr.HTML(visible=False, value="")
             rebuttal_for_review6 = gr.HTML(visible=False, value="")
 
             # General rebuttal display (for rebuttals not tied to specific reviews)
@@ -2100,7 +2118,10 @@ with gr.Blocks(
 
         # ---- CALLBACKS ----
 
-        _interactive_inputs = [review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox, focus_radio]
+        # State to hold raw rebuttal string (set by _show_raw_and_switch, consumed by process_interactive_reviews_fast)
+        interactive_rebuttal_state = gr.State("")
+
+        _interactive_inputs = [review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox, focus_radio, interactive_rebuttal_state]
 
         # State to hold RSA computation results for async updates
         rsa_computation_state = gr.State({})
@@ -2142,23 +2163,26 @@ with gr.Blocks(
             texts = [r1, r2, r3, r4, r5, r6]
             active_count = sum(1 for t in texts if t and t.strip())
 
-            # Tokenize each review (fast, no ML)
+            # Pre-compute per-review rebuttal HTML (to embed inside review cards)
+            rebuttal_htmls = [format_rebuttal_for_review(rebuttal or "", i + 1) for i in range(6)]
+            has_per_review = any(rebuttal_htmls)
+
+            # Tokenize each review and render as HTML with collapsible cards (fast, no ML)
+            # Rebuttal is embedded INSIDE the card (like the pre-processed tab)
             none_out = []
-            for t in texts:
+            for idx, t in enumerate(texts):
                 if t and t.strip():
                     sentences = [s for s in glimpse_tokenizer(t) if s.strip()]
-                    none_out.append(gr.update(visible=True, value=[(s, None) for s in sentences]))
+                    plain_items = [(s, {}) for s in sentences]
+                    inner = render_review_html(plain_items, mode="plain", label="")
+                    reb = rebuttal_htmls[idx]
+                    html = _wrap_review_card(f"Review {idx + 1}", f"{inner}{reb}", collapsible=True)
+                    none_out.append(gr.update(visible=True, value=html))
                 else:
-                    none_out.append(gr.update(visible=False, value=None))
+                    none_out.append(gr.update(visible=False, value=""))
 
-            # Per-review rebuttals
-            per_review = []
-            has_per_review = False
-            for i in range(1, 7):
-                formatted = format_rebuttal_for_review(rebuttal or "", i)
-                if formatted:
-                    has_per_review = True
-                per_review.append(gr.update(visible=bool(formatted), value=formatted))
+            # Per-review rebuttal components are now hidden (content embedded in cards above)
+            per_review = [gr.update(visible=False, value="") for _ in range(6)]
 
             general_formatted = format_general_rebuttals(rebuttal or "")
             has_any = has_per_review or bool(general_formatted)
@@ -2188,9 +2212,10 @@ with gr.Blocks(
                 gr.update(visible=True, value=POLARITY_PROGRESS_HTML), # polarity_progress_html
                 gr.update(visible=True, value=AGREEMENT_PROGRESS_HTML),# agreement_progress_html
                 gr.update(visible=True, value=toggle_bar),             # interactive_rebuttal_toggle
-                *per_review,                                           # rebuttal_for_review1..6
+                *per_review,                                           # rebuttal_for_review1..6 (hidden, embedded in cards)
                 gr.update(visible=bool(general_formatted), value=general_formatted),  # interactive_rebuttal_display
                 active_count,                                          # interactive_review_count
+                rebuttal or "",                                        # interactive_rebuttal_state
             )
 
         def _show_results_with_rebuttal(rebuttal, active_count):
@@ -2260,7 +2285,8 @@ with gr.Blocks(
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, interactive_review_count]
+                     interactive_rebuttal_display, interactive_review_count,
+                     interactive_rebuttal_state]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2297,7 +2323,8 @@ with gr.Blocks(
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, interactive_review_count]
+                     interactive_rebuttal_display, interactive_review_count,
+                     interactive_rebuttal_state]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2351,7 +2378,7 @@ with gr.Blocks(
                 "",                                              # clear paste_rebuttal
                 3,                                               # reset count
                 "", "",                                          # clear most common/divergent
-                *([None] * 6), *([""] * 6), *([None] * 6), *([None] * 6),   # clear all output panels (none, agree, polar, topic)
+                *([""] * 6), *([""] * 6), *([""] * 6), *([""] * 6),   # clear all output panels (none, agree, polar, topic)
                 {},                                              # reset rsa_computation_state
             ),
             inputs=[],
