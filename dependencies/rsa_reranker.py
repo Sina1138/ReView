@@ -85,7 +85,7 @@ class RSAReranking:
         y = [str(item) for item in list(y)]
         assert len(x) == len(y), "x and y must have the same length"
 
-        loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+        loss_fn = torch.nn.CrossEntropyLoss(reduction="none", ignore_index=self.tokenizer.pad_token_id)
         batch_size = len(x)
 
         # Try to use cached tokenized sources for efficiency

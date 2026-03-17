@@ -46,6 +46,19 @@ def _try_bettertransformer(model):
     return model
 
 
+
+def _set_optimal_threads():
+    """Set PyTorch thread count from SLURM allocation to avoid over/under-subscription."""
+    slurm_cpus = os.environ.get('SLURM_CPUS_PER_TASK') or os.environ.get('SLURM_CPUS_ON_NODE')
+    if slurm_cpus:
+        num_threads = int(slurm_cpus)
+        torch.set_num_threads(num_threads)
+        torch.set_num_interop_threads(min(num_threads, 4))
+        print(f"[THREADS] Set to {num_threads} (from SLURM)")
+    else:
+        print(f"[THREADS] Using PyTorch default: {torch.get_num_threads()}")
+
+
 class InteractiveReviewProcessor:
     """Process reviews through the same pipeline as preprocessed data."""
 
@@ -53,6 +66,9 @@ class InteractiveReviewProcessor:
         """Initialize processor with all required models."""
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         t_total = time.time()
+
+        # Set optimal thread count for SLURM environment
+        _set_optimal_threads()
 
         # Load summarization model (for RSA)
         t0 = time.time()
@@ -65,7 +81,7 @@ class InteractiveReviewProcessor:
         )
         self.rsa_tokenizer = AutoTokenizer.from_pretrained(rsa_model_name)
         self.rsa_model.to(self.device)
-        self.rsa_model = _try_bettertransformer(self.rsa_model)
+        # BetterTransformer DISABLED for RSA — causes 2x slowdown on DistilBart CPU
         self.rsa_model.eval()
         print(f"[TIMING] RSA model loaded in {time.time() - t0:.1f}s")
 
@@ -85,7 +101,9 @@ class InteractiveReviewProcessor:
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
         self.polarity_model.to(self.device)
+        self.polarity_model = _try_bettertransformer(self.polarity_model)
         self.polarity_model.eval()
+
         print(f"[TIMING] Polarity model loaded in {time.time() - t0:.1f}s")
 
         # Load topic model
@@ -102,8 +120,11 @@ class InteractiveReviewProcessor:
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
         self.topic_model.to(self.device)
+        self.topic_model = _try_bettertransformer(self.topic_model)
         self.topic_model.eval()
+
         print(f"[TIMING] Topic model loaded in {time.time() - t0:.1f}s")
+
         print(f"[TIMING] All models loaded in {time.time() - t_total:.1f}s")
 
         # Topic ID to label mapping

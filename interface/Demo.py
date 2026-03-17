@@ -1278,52 +1278,71 @@ def format_general_rebuttals(rebuttal: str) -> str:
     )
 
 
-def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, rebuttal_str: str = "", progress=gr.Progress()) -> Tuple:
+def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, rebuttal_str: str = "", thread_state=None, progress=gr.Progress()) -> Tuple:
     """
     Fast processing: Polarity + Topic only (~3-5 sec on CPU).
     RSA (agreement) runs in background.
-    Returns immediately with placeholder agreement sections that update when ready.
+    If thread_state is provided, polarity+topic was already started during page transition —
+    just wait for it instead of re-computing.
     """
     import time as _time
     from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
     t_start = _time.time()
-    all_texts = [text1, text2, text3, text4, text5, text6]
-    active_texts = [t for t in all_texts if t and t.strip()]
 
-    if len(active_texts) < 2:
-        raise ValueError("Please enter at least two reviews")
+    # Check if polarity+topic was already started in background by _show_raw_and_switch
+    if thread_state and isinstance(thread_state, dict) and thread_state.get("thread"):
+        bg_thread = thread_state["thread"]
+        _result = thread_state["result"]
+        sentence_lists = thread_state["sentence_lists"]
+        active_texts = thread_state["active_texts"]
+        all_sentences = thread_state["all_sentences"]
 
-    # Step 1: Load models
-    progress(0.0, desc="Loading models...")
-    t0 = _time.time()
-    processor = get_interactive_processor()
-    print(f"[TIMING] get_interactive_processor: {_time.time() - t0:.1f}s")
+        progress(0.30, desc="Predicting polarity and topics...")
 
-    # Step 2: Tokenize
-    progress(0.10, desc="Tokenizing reviews...")
-    t0 = _time.time()
-    sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in active_texts]
-    sentence_lists = [sl for sl in sentence_lists if sl]
-    print(f"[TIMING] Tokenization: {_time.time() - t0:.1f}s ({sum(len(sl) for sl in sentence_lists)} total sentences)")
+        # Wait for the background thread (may already be done!)
+        bg_thread.join()
 
-    if len(sentence_lists) < 2:
-        raise ValueError("At least two reviews must have valid sentences")
+        if _result.get("error"):
+            raise _result["error"]
 
-    t0 = _time.time()
-    all_sentences = filter_and_clean_sentences(
-        list(set(s for sl in sentence_lists for s in sl))
-    )
-    print(f"[TIMING] filter_and_clean: {_time.time() - t0:.1f}s ({len(all_sentences)} unique sentences)")
+        polarity_map = _result["polarity"]
+        topic_map = _result["topic"]
+        print(f"[TIMING] Polarity+Topic (from early-start thread): {_time.time() - t_start:.1f}s wait")
+    else:
+        # Fallback: compute from scratch (e.g. if thread_state was not passed)
+        all_texts = [text1, text2, text3, text4, text5, text6]
+        active_texts = [t for t in all_texts if t and t.strip()]
 
-    # Step 3-4: Polarity + Topic (parallelize both models)
-    progress(0.30, desc="Predicting polarity and topics (parallel)...")
-    from concurrent.futures import ThreadPoolExecutor
+        if len(active_texts) < 2:
+            raise ValueError("Please enter at least two reviews")
 
-    t0 = _time.time()
-    polarity_map = processor.predict_polarity(all_sentences)
-    topic_map = processor.predict_topic(all_sentences)
-    print(f"[TIMING] Polarity+Topic (sequential): {_time.time() - t0:.1f}s")
+        progress(0.0, desc="Loading models...")
+        t0 = _time.time()
+        processor = get_interactive_processor()
+        print(f"[TIMING] get_interactive_processor: {_time.time() - t0:.1f}s")
+
+        progress(0.10, desc="Tokenizing reviews...")
+        t0 = _time.time()
+        sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in active_texts]
+        sentence_lists = [sl for sl in sentence_lists if sl]
+        print(f"[TIMING] Tokenization: {_time.time() - t0:.1f}s ({sum(len(sl) for sl in sentence_lists)} total sentences)")
+
+        if len(sentence_lists) < 2:
+            raise ValueError("At least two reviews must have valid sentences")
+
+        t0 = _time.time()
+        all_sentences = filter_and_clean_sentences(
+            list(set(s for sl in sentence_lists for s in sl))
+        )
+        print(f"[TIMING] filter_and_clean: {_time.time() - t0:.1f}s ({len(all_sentences)} unique sentences)")
+
+        progress(0.30, desc="Predicting polarity and topics...")
+        t0 = _time.time()
+        polarity_map = processor.predict_polarity(all_sentences)
+        topic_map = processor.predict_topic(all_sentences)
+        print(f"[TIMING] Polarity+Topic (sequential): {_time.time() - t0:.1f}s")
+
     print(f"[TIMING] Fast processing total: {_time.time() - t_start:.1f}s")
 
     # Step 5: Format results as HTML with collapsible review cards
@@ -2212,7 +2231,10 @@ with gr.Blocks(
         # State to hold raw rebuttal string (set by _show_raw_and_switch, consumed by process_interactive_reviews_fast)
         interactive_rebuttal_state = gr.State("")
 
-        _interactive_inputs = [review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox, focus_radio, interactive_rebuttal_state]
+        # State to hold background processing thread (polarity+topic starts during page transition)
+        processing_thread_state = gr.State(None)
+
+        _interactive_inputs = [review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox, focus_radio, interactive_rebuttal_state, processing_thread_state]
 
         # State to hold RSA computation results for async updates
         rsa_computation_state = gr.State({})
@@ -2249,7 +2271,10 @@ with gr.Blocks(
         no_title_state = gr.State("")
 
         def _show_raw_and_switch(r1, r2, r3, r4, r5, r6, rebuttal, title=""):
-            """Immediately switch to results view with raw tokenized reviews. No ML — just glimpse_tokenizer."""
+            """Immediately switch to results view with raw tokenized reviews.
+            Also kicks off polarity+topic in a background thread so processing
+            overlaps with page transition rendering."""
+            import time as _time
             from dependencies.Glimpse_tokenizer import glimpse_tokenizer
             texts = [r1, r2, r3, r4, r5, r6]
             active_count = sum(1 for t in texts if t and t.strip())
@@ -2289,6 +2314,44 @@ with gr.Blocks(
             )
 
             title_text = title.strip() if title and title.strip() else ""
+
+            # Start polarity+topic in background thread NOW, so processing
+            # overlaps with Gradio rendering the page transition to the user.
+            # By the time process_interactive_reviews_fast runs, work is already underway.
+            active_texts = [t for t in texts if t and t.strip()]
+            sentence_lists = []
+            for t in active_texts:
+                sents = [s for s in glimpse_tokenizer(t) if s.strip()]
+                if sents:
+                    sentence_lists.append(sents)
+            all_sentences = filter_and_clean_sentences(
+                list(set(s for sl in sentence_lists for s in sl))
+            )
+
+            processor = get_interactive_processor()
+            _thread_result = {"polarity": None, "topic": None, "error": None}
+
+            def _run_polarity_topic():
+                try:
+                    t0 = _time.time()
+                    _thread_result["polarity"] = processor.predict_polarity(all_sentences)
+                    _thread_result["topic"] = processor.predict_topic(all_sentences)
+                    print(f"[TIMING] Early polarity+topic thread done in {_time.time() - t0:.1f}s")
+                except Exception as e:
+                    _thread_result["error"] = e
+
+            bg_thread = threading.Thread(target=_run_polarity_topic, daemon=True)
+            bg_thread.start()
+            print(f"[TIMING] Background polarity+topic thread started (page transitioning...)")
+
+            thread_state = {
+                "thread": bg_thread,
+                "result": _thread_result,
+                "sentence_lists": sentence_lists,
+                "active_texts": active_texts,
+                "all_sentences": all_sentences,
+            }
+
             return (
                 *none_out,                                              # none_text1..6
                 gr.update(visible=False),                              # input_section
@@ -2306,6 +2369,7 @@ with gr.Blocks(
                 active_count,                                          # interactive_review_count
                 rebuttal or "",                                        # interactive_rebuttal_state
                 gr.update(visible=False, value=""),                     # interactive_legend_html (reset on new submission)
+                thread_state,                                           # processing_thread_state
             )
 
         def _show_results_with_rebuttal(rebuttal, active_count):
@@ -2376,7 +2440,8 @@ with gr.Blocks(
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state, interactive_legend_html]
+                     interactive_rebuttal_state, interactive_legend_html,
+                     processing_thread_state]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2414,7 +2479,8 @@ with gr.Blocks(
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state, interactive_legend_html]
+                     interactive_rebuttal_state, interactive_legend_html,
+                     processing_thread_state]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2581,5 +2647,8 @@ with gr.Blocks(
         inputs=[state],
         outputs=_review_outputs,
     )
+
+# Pre-load interactive processor models at startup so first request isn't slow
+get_interactive_processor()
 
 demo.launch(share=False)
