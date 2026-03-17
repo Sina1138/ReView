@@ -2305,6 +2305,7 @@ with gr.Blocks(
                 gr.update(visible=bool(general_formatted), value=general_formatted),  # interactive_rebuttal_display
                 active_count,                                          # interactive_review_count
                 rebuttal or "",                                        # interactive_rebuttal_state
+                gr.update(visible=False, value=""),                     # interactive_legend_html (reset on new submission)
             )
 
         def _show_results_with_rebuttal(rebuttal, active_count):
@@ -2375,7 +2376,7 @@ with gr.Blocks(
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state]
+                     interactive_rebuttal_state, interactive_legend_html]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2413,7 +2414,7 @@ with gr.Blocks(
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
                      interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state]
+                     interactive_rebuttal_state, interactive_legend_html]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
