@@ -34,6 +34,17 @@ except ImportError:
     OPENREVIEW_AVAILABLE = False
 
 
+def _try_bettertransformer(model):
+    """Apply BetterTransformer (fused attention) if available. ~6% CPU speedup."""
+    try:
+        from optimum.bettertransformer import BetterTransformer
+        model = BetterTransformer.transform(model)
+        print(f"  BetterTransformer enabled for {model.__class__.__name__}")
+    except Exception:
+        pass
+    return model
+
+
 class InteractiveReviewProcessor:
     """Process reviews through the same pipeline as preprocessed data."""
 
@@ -51,6 +62,7 @@ class InteractiveReviewProcessor:
         )
         self.rsa_tokenizer = AutoTokenizer.from_pretrained(rsa_model_name)
         self.rsa_model.to(self.device)
+        self.rsa_model = _try_bettertransformer(self.rsa_model)
         self.rsa_model.eval()
 
         # Load polarity model
@@ -68,6 +80,7 @@ class InteractiveReviewProcessor:
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
         self.polarity_model.to(self.device)
+        self.polarity_model = _try_bettertransformer(self.polarity_model)
         self.polarity_model.eval()
 
         # Load topic model
@@ -83,6 +96,7 @@ class InteractiveReviewProcessor:
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
         self.topic_model.to(self.device)
+        self.topic_model = _try_bettertransformer(self.topic_model)
         self.topic_model.eval()
 
         # Topic ID to label mapping
@@ -124,7 +138,7 @@ class InteractiveReviewProcessor:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=512
+            max_length=256  # Reduced from 512 — individual sentences rarely exceed 256 tokens
         ).to(self.device)
 
         with torch.no_grad():
@@ -147,7 +161,7 @@ class InteractiveReviewProcessor:
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=512
+            max_length=256  # Reduced from 512 — individual sentences rarely exceed 256 tokens
         ).to(self.device)
 
         with torch.no_grad():

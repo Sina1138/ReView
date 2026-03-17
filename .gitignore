@@ -5,9 +5,10 @@ logs_and_guides/
 logs/
 .rtk/
 
-# validation and training files -- to be added back after
+# validation, training, and benchmark files -- to be added back after
 validation/
 training/
+benchmark_cpu_optimizations/
 
 # ========================================================================
 
