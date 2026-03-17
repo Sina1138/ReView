@@ -994,14 +994,27 @@ FETCHING_HTML = """
 <style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
 """
 
-AGREEMENT_PROGRESS_HTML = """
-<div style="padding:14px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+POLARITY_PROGRESS_HTML = """
+<div style="padding:10px 16px;background:#f0fff4;border-radius:8px;border:1px solid #bbf7d0;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:20px;height:20px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#312e81;font-size:0.9em;">Computing agreement in background...</span>
+    <div style="width:18px;height:18px;border:3px solid #dcfce7;border-top:3px solid #16a34a;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic...</span>
+    <div style="flex:1;background:#dcfce7;border-radius:4px;height:6px;overflow:hidden;">
+      <div style="background:linear-gradient(90deg,#4ade80,#16a34a);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
+    </div>
   </div>
-  <div style="background:#e0e7ff;border-radius:4px;height:5px;margin-top:10px;overflow:hidden;">
-    <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:30%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
+</div>
+<style>@keyframes procspin{to{transform:rotate(360deg);}}@keyframes agrslide{0%{width:15%;margin-left:0;}50%{width:35%;margin-left:50%;}100%{width:15%;margin-left:85%;}}</style>
+"""
+
+AGREEMENT_PROGRESS_HTML = """
+<div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="width:18px;height:18px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement in background...</span>
+    <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
+      <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
+    </div>
   </div>
 </div>
 <style>@keyframes procspin{to{transform:rotate(360deg);}}@keyframes agrslide{0%{width:15%;margin-left:0;}50%{width:35%;margin-left:50%;}100%{width:15%;margin-left:85%;}}</style>
@@ -1297,17 +1310,33 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     )
 
 
-def _agreement_progress_html(pct: int, done: int, total: int) -> str:
-    """Progress bar HTML for the agreement computation, with real percentage."""
+def _fmt_time(sec: float) -> str:
+    """Format seconds as MM:SS or HH:MM:SS like tqdm."""
+    if sec is None:
+        return "?"
+    sec = int(sec)
+    if sec < 3600:
+        return f"{sec // 60:02d}:{sec % 60:02d}"
+    return f"{sec // 3600}:{(sec % 3600) // 60:02d}:{sec % 60:02d}"
+
+
+def _agreement_progress_html(pct: int, done: int, total: int,
+                              eta_sec: float = None, elapsed: float = None,
+                              rate: float = None) -> str:
+    """Progress bar HTML for the agreement computation, tqdm-style [elapsed<eta, rate s/it]."""
+    if done > 0 and elapsed is not None:
+        info = f"{done}/{total} [{_fmt_time(elapsed)}<{_fmt_time(eta_sec)}, {rate:.1f}s/it]"
+    else:
+        info = f"{done}/{total}"
     return f"""
-<div style="padding:14px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
+<div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:20px;height:20px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#312e81;font-size:0.9em;">Computing agreement... {pct}%</span>
-    <span style="font-size:0.78em;color:#6b7280;margin-left:auto;">batch {done}/{total}</span>
-  </div>
-  <div style="background:#e0e7ff;border-radius:4px;height:6px;margin-top:10px;overflow:hidden;">
-    <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
+    <div style="width:18px;height:18px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
+    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement... {pct}%</span>
+    <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
+      <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
+    </div>
+    <span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">{info}</span>
   </div>
 </div>
 <style>@keyframes procspin{{to{{transform:rotate(360deg);}}}}</style>
@@ -1333,9 +1362,11 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
     active_texts = rsa_state["active_texts"]
 
     # Shared progress state updated by progress_callback from the RSA thread
-    _prog = {"done": 0, "total": 1, "result": None, "error": None}
+    _prog = {"done": 0, "total": 1, "result": None, "error": None, "start_time": None}
 
     def _progress_callback(done, total):
+        if _prog["start_time"] is None:
+            _prog["start_time"] = time.time()
         _prog["done"] = done
         _prog["total"] = total
 
@@ -1353,7 +1384,16 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
     while t.is_alive():
         done, total = _prog["done"], _prog["total"]
         pct = int(done / total * 100) if total > 0 else 0
-        yield (*_no_op_8, gr.update(visible=True, value=_agreement_progress_html(pct, done, total)), gr.update())
+        # tqdm-style ETA: elapsed/done * remaining
+        eta_sec = None
+        elapsed = None
+        rate = None
+        t0 = _prog.get("start_time")
+        if t0 and done > 0:
+            elapsed = time.time() - t0
+            rate = elapsed / done  # seconds per batch
+            eta_sec = rate * (total - done)
+        yield (*_no_op_8, gr.update(visible=True, value=_agreement_progress_html(pct, done, total, eta_sec, elapsed, rate)), gr.update())
         time.sleep(0.4)
 
     t.join()
@@ -1480,6 +1520,21 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 /* Zero-height review anchor elements for jump navigation */
 .review-anchor { height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; border: none !important; }
 .review-anchor > * { height: 0 !important; margin: 0 !important; padding: 0 !important; }
+
+/* Remove Gradio wrapper spacing around progress bars */
+.progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+.progress-group { gap: 0 !important; padding: 0 !important; margin: 0 !important; width: 100% !important; border: none !important; background: none !important; box-shadow: none !important; min-height: 0 !important; }
+.progress-group > * { margin: 0 !important; padding: 0 !important; width: 100% !important; }
+/* Suppress Gradio's loading/progress indicator on progress bar components */
+.progress-compact .progress-bar, .progress-compact .eta-bar,
+.progress-compact > .wrap, .progress-compact .generating,
+.progress-group .progress-bar, .progress-group .eta-bar { display: none !important; }
+
+/* Suppress Gradio's orange "pending update" pulsing border */
+.generating { animation: none !important; border-color: #e5e7eb !important; box-shadow: none !important; }
+
+/* Remove the border/separator line around the display mode radio row */
+.no-border-row { border: none !important; box-shadow: none !important; padding: 0 !important; margin-bottom: 0 !important; }
 """
 
 with gr.Blocks(
@@ -1929,6 +1984,7 @@ with gr.Blocks(
         # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
             back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
+            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False)
             view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
         # ---- INPUT SECTION (full-width, visible initially) ----
@@ -1969,7 +2025,7 @@ with gr.Blocks(
 
         # ---- RESULTS SECTION (full-width, hidden initially) ----
         with gr.Column(visible=False) as results_section:
-            with gr.Row():
+            with gr.Row(elem_classes=["no-border-row"]):
                 focus_radio = gr.Radio(
                     choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"],
                     value="No Highlighting",
@@ -1977,8 +2033,10 @@ with gr.Blocks(
                     interactive=True
                 )
 
-            # Agreement progress bar (inside results_section so it stays visible)
-            agreement_progress_html = gr.HTML("", visible=False)
+            # Progress bars — wrapped in zero-gap column so they sit flush together
+            with gr.Column(elem_classes=["progress-group"]):
+                polarity_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+                agreement_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
 
             with gr.Row():
                 most_divergent = gr.HTML(
@@ -2048,8 +2106,13 @@ with gr.Blocks(
         # State to hold RSA computation results for async updates
         rsa_computation_state = gr.State({})
 
+        # Sink states: absorb none_textN outputs from process_interactive_reviews_fast
+        # (none_texts are already set by _show_raw_and_switch; routing them to states
+        #  prevents Gradio from showing a "pending" loading spinner on the review cards)
+        _none_sinks = [gr.State(None) for _ in range(6)]
+
         _interactive_outputs = [
-            none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
+            *_none_sinks,  # absorb none_text1..6 — already populated, no spinner wanted
             agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
             most_common, most_divergent,
             polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
@@ -2071,6 +2134,65 @@ with gr.Blocks(
             if not link or not link.strip():
                 raise gr.Error("Please paste a valid OpenReview link before fetching.")
             return gr.update(value=FETCHING_HTML, visible=True), gr.update(interactive=False)
+
+        no_title_state = gr.State("")
+
+        def _show_raw_and_switch(r1, r2, r3, r4, r5, r6, rebuttal, title=""):
+            """Immediately switch to results view with raw tokenized reviews. No ML — just glimpse_tokenizer."""
+            from dependencies.Glimpse_tokenizer import glimpse_tokenizer
+            texts = [r1, r2, r3, r4, r5, r6]
+            active_count = sum(1 for t in texts if t and t.strip())
+
+            # Tokenize each review (fast, no ML)
+            none_out = []
+            for t in texts:
+                if t and t.strip():
+                    sentences = [s for s in glimpse_tokenizer(t) if s.strip()]
+                    none_out.append(gr.update(visible=True, value=[(s, None) for s in sentences]))
+                else:
+                    none_out.append(gr.update(visible=False, value=None))
+
+            # Per-review rebuttals
+            per_review = []
+            has_per_review = False
+            for i in range(1, 7):
+                formatted = format_rebuttal_for_review(rebuttal or "", i)
+                if formatted:
+                    has_per_review = True
+                per_review.append(gr.update(visible=bool(formatted), value=formatted))
+
+            general_formatted = format_general_rebuttals(rebuttal or "")
+            has_any = has_per_review or bool(general_formatted)
+
+            # Toggle bar
+            right_buttons = [_review_toggle_html()]
+            if has_any:
+                right_buttons.append(_rebuttal_toggle_html())
+            toggle_bar = (
+                '<div style="display:flex;align-items:center;gap:8px;">'
+                '<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
+                + _jump_buttons_html(active_count)
+                + '<span style="flex:1;"></span>'
+                + "".join(right_buttons) + '</div>'
+            )
+
+            title_text = f"📄 {title.strip()}" if title and title.strip() else ""
+            return (
+                *none_out,                                              # none_text1..6
+                gr.update(visible=False),                              # input_section
+                gr.update(visible=True),                               # results_section
+                gr.update(visible=True),                               # back_to_input_btn
+                gr.update(visible=bool(title_text), value=title_text), # paper_title_html (Textbox)
+                gr.update(visible=False),                              # view_results_btn
+                gr.update(choices=["No Highlighting", "Polarity ⏳", "Topic ⏳", "Agreement ⏳"],
+                           value="No Highlighting", interactive=True), # focus_radio
+                gr.update(visible=True, value=POLARITY_PROGRESS_HTML), # polarity_progress_html
+                gr.update(visible=True, value=AGREEMENT_PROGRESS_HTML),# agreement_progress_html
+                gr.update(visible=True, value=toggle_bar),             # interactive_rebuttal_toggle
+                *per_review,                                           # rebuttal_for_review1..6
+                gr.update(visible=bool(general_formatted), value=general_formatted),  # interactive_rebuttal_display
+                active_count,                                          # interactive_review_count
+            )
 
         def _show_results_with_rebuttal(rebuttal, active_count):
             # Generate per-review rebuttals
@@ -2122,27 +2244,35 @@ with gr.Blocks(
             outputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
                      openreview_title, openreview_rebuttal, status_html]
         ).success(
-            fn=lambda r4, r5, r6, title: (
-                gr.update(visible=bool(title.strip())),
-                gr.update(value=PROCESSING_TIMER_HTML, visible=True),
+            fn=lambda r4, r5, r6: (
                 gr.update(visible=bool(r4.strip())),
                 gr.update(visible=bool(r5.strip())),
                 gr.update(visible=bool(r6.strip())),
             ),
-            inputs=[review4_textbox, review5_textbox, review6_textbox, openreview_title],
-            outputs=[openreview_title, status_html, review4_textbox, review5_textbox, review6_textbox]
+            inputs=[review4_textbox, review5_textbox, review6_textbox],
+            outputs=[review4_textbox, review5_textbox, review6_textbox]
+        ).success(
+            fn=_show_raw_and_switch,
+            inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
+                    openreview_rebuttal, openreview_title],
+            outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
+                     input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn, focus_radio,
+                     polarity_progress_html, agreement_progress_html,
+                     interactive_rebuttal_toggle,
+                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
+                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
+                     interactive_rebuttal_display, interactive_review_count]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
             outputs=_interactive_outputs
         ).success(
-            fn=_show_results_with_rebuttal,
-            inputs=[openreview_rebuttal, interactive_review_count],
-            outputs=[input_section, results_section, agreement_progress_html, back_to_input_btn, view_results_btn, focus_radio,
-                     interactive_rebuttal_toggle,
-                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
-                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display]
+            fn=lambda: (
+                gr.update(visible=False, value=""),
+                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement ⏳"], interactive=True),
+            ),
+            inputs=[],
+            outputs=[polarity_progress_html, focus_radio]
         ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
@@ -2153,26 +2283,33 @@ with gr.Blocks(
             outputs=_rsa_outputs
         )
 
-        # Process (Paste Reviews): show timer → fast scoring → swap to results → async RSA in background
+        # Process (Paste Reviews): show raw reviews immediately → fast scoring → async RSA
         submit_button.click(
-            fn=lambda: (
-                gr.update(value=PROCESSING_TIMER_HTML, visible=True),
-                gr.update(interactive=False),
-            ),
+            fn=lambda: gr.update(interactive=False),
             inputs=[],
-            outputs=[status_html, submit_button]
+            outputs=[submit_button]
+        ).success(
+            fn=_show_raw_and_switch,
+            inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
+                    paste_rebuttal, no_title_state],
+            outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
+                     input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn, focus_radio,
+                     polarity_progress_html, agreement_progress_html,
+                     interactive_rebuttal_toggle,
+                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
+                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
+                     interactive_rebuttal_display, interactive_review_count]
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
             outputs=_interactive_outputs
         ).success(
-            fn=_show_results_with_rebuttal,
-            inputs=[paste_rebuttal, interactive_review_count],
-            outputs=[input_section, results_section, agreement_progress_html, back_to_input_btn, view_results_btn, focus_radio,
-                     interactive_rebuttal_toggle,
-                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
-                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display]
+            fn=lambda: (
+                gr.update(visible=False, value=""),
+                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement ⏳"], interactive=True),
+            ),
+            inputs=[],
+            outputs=[polarity_progress_html, focus_radio]
         ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
@@ -2186,22 +2323,23 @@ with gr.Blocks(
         # Top bar: Back to input
         back_to_input_btn.click(
             fn=lambda: (
-                gr.update(visible=True),                     # show input
-                gr.update(visible=False),                    # hide results
-                gr.update(visible=False),                    # hide "back to input"
-                gr.update(visible=True),                     # show "view results"
+                gr.update(visible=True),    # show input
+                gr.update(visible=False),   # hide results
+                gr.update(visible=False),   # hide "back to input"
+                gr.update(visible=False),   # hide paper title
+                gr.update(visible=True),    # show "view results"
             ),
             inputs=[],
-            outputs=[input_section, results_section, back_to_input_btn, view_results_btn]
+            outputs=[input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn]
         )
 
         # Top bar: View Results (toggle back without re-processing)
         view_results_btn.click(
             fn=lambda: (
-                gr.update(visible=False),                    # hide input
-                gr.update(visible=True),                     # show results
-                gr.update(visible=True),                     # show "back to input"
-                gr.update(visible=False),                    # hide "view results"
+                gr.update(visible=False),   # hide input
+                gr.update(visible=True),    # show results
+                gr.update(visible=True),    # show "back to input"
+                gr.update(visible=False),   # hide "view results"
             ),
             inputs=[],
             outputs=[input_section, results_section, back_to_input_btn, view_results_btn]
@@ -2235,20 +2373,27 @@ with gr.Blocks(
                 gr.update(visible=False, value=""),  # rebuttal toggle
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 1-3
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 4-6
-                gr.update(visible=False, value="")  # consolidated rebuttal
+                gr.update(visible=False, value=""),  # consolidated rebuttal
+                gr.update(visible=False, value=""),  # paper_title_html
+                gr.update(visible=False, value=""),  # polarity_progress_html
+                gr.update(visible=False, value=""),  # agreement_progress_html
             ),
             inputs=[],
             outputs=[review4_textbox, review5_textbox, review6_textbox,
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display]
+                     interactive_rebuttal_display, paper_title_html,
+                     polarity_progress_html, agreement_progress_html]
         )
 
         # Toggle display mode (No Highlighting / Polarity / Topic / Agreement[Processing])
         def toggle_display_mode(focus, active_count):
-            # Treat "Agreement (Processing)" as "Agreement" for section visibility
-            effective_focus = "Agreement" if focus == "Agreement (Processing)" else focus
+            # Strip ⏳ loading suffix — treat "Polarity ⏳" as "Polarity", etc.
+            effective_focus = focus.split(" ⏳")[0] if " ⏳" in focus else focus
+            # Legacy compat
+            if effective_focus == "Agreement (Processing)":
+                effective_focus = "Agreement"
 
             updates = []
             for mode in ["No Highlighting", "Polarity", "Topic", "Agreement"]:
