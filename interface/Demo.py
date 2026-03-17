@@ -1521,14 +1521,14 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 .review-anchor { height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; border: none !important; }
 .review-anchor > * { height: 0 !important; margin: 0 !important; padding: 0 !important; }
 
+/* Tighter vertical spacing in results section */
+.results-compact { gap: 4px !important; }
+
 /* Remove Gradio wrapper spacing around progress bars */
 .progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; }
-.progress-group { gap: 0 !important; padding: 0 !important; margin: 0 !important; width: 100% !important; border: none !important; background: none !important; box-shadow: none !important; min-height: 0 !important; }
-.progress-group > * { margin: 0 !important; padding: 0 !important; width: 100% !important; }
 /* Suppress Gradio's loading/progress indicator on progress bar components */
 .progress-compact .progress-bar, .progress-compact .eta-bar,
-.progress-compact > .wrap, .progress-compact .generating,
-.progress-group .progress-bar, .progress-group .eta-bar { display: none !important; }
+.progress-compact > .wrap, .progress-compact .generating { display: none !important; }
 
 /* Suppress Gradio's orange "pending update" pulsing border */
 .generating { animation: none !important; border-color: #e5e7eb !important; box-shadow: none !important; }
@@ -2024,7 +2024,7 @@ with gr.Blocks(
             status_html = gr.HTML("", visible=False)
 
         # ---- RESULTS SECTION (full-width, hidden initially) ----
-        with gr.Column(visible=False) as results_section:
+        with gr.Column(visible=False, elem_classes=["results-compact"]) as results_section:
             with gr.Row(elem_classes=["no-border-row"]):
                 focus_radio = gr.Radio(
                     choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"],
@@ -2033,10 +2033,9 @@ with gr.Blocks(
                     interactive=True
                 )
 
-            # Progress bars — wrapped in zero-gap column so they sit flush together
-            with gr.Column(elem_classes=["progress-group"]):
-                polarity_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
-                agreement_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+            # Progress bars (directly in results_section — no wrapper column, so they vanish completely when hidden)
+            polarity_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
+            agreement_progress_html = gr.HTML("", visible=False, elem_classes=["progress-compact"])
 
             with gr.Row():
                 most_divergent = gr.HTML(
