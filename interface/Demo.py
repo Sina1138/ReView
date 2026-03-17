@@ -838,6 +838,38 @@ def render_agreement_html(
     return content
 
 
+def build_review_card(
+    label: str,
+    *,
+    review_items: list = None,
+    mode: str = "plain",
+    sentences: List[str] = None,
+    uniqueness: Dict = None,
+    listener: dict = None,
+    speaker: dict = None,
+    num_reviews: int = 0,
+    divergent_html: str = "",
+    rebuttal_html: str = "",
+    collapsible: bool = True,
+) -> str:
+    """Unified review card builder — single entry point for both tabs.
+
+    For plain/polarity/topic: pass review_items + mode.
+    For agreement: pass sentences + RSA dicts (uniqueness, listener, speaker, num_reviews).
+    Optional divergent_html and rebuttal_html are appended inside the card.
+    """
+    if sentences is not None:
+        inner = render_agreement_html(
+            sentences, uniqueness or {}, listener, speaker,
+            num_reviews=num_reviews, label="",
+        )
+    elif review_items is not None:
+        inner = render_review_html(review_items, mode=mode, label="")
+    else:
+        inner = ""
+    return _wrap_review_card(label, f"{inner}{divergent_html}{rebuttal_html}", collapsible=collapsible)
+
+
 # Auto-detect the preprocessed dataset CSV
 def _find_preprocessed_csv() -> Path:
     """Find the most recent preprocessed_scored_reviews_*.csv in the data dir."""
@@ -998,7 +1030,7 @@ POLARITY_PROGRESS_HTML = """
 <div style="padding:10px 16px;background:#f0fff4;border-radius:8px;border:1px solid #bbf7d0;margin:0;">
   <div style="display:flex;align-items:center;gap:10px;">
     <div style="width:18px;height:18px;border:3px solid #dcfce7;border-top:3px solid #16a34a;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic: </span>
+    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic... </span>
     <div style="flex:1;background:#dcfce7;border-radius:4px;height:6px;overflow:hidden;">
       <div style="background:linear-gradient(90deg,#4ade80,#16a34a);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
     </div>
@@ -1117,6 +1149,22 @@ _REBUTTAL_GENERAL_STYLE = (
     "margin-top:16px;border-radius:8px;overflow:hidden;"
     "border:1px solid #fde68a;"
 )
+
+
+def format_rebuttal_plain(text: str) -> str:
+    """Format a plain text rebuttal as collapsible HTML.
+    For pre-processed data where each review has its own rebuttal string."""
+    if not text or not text.strip():
+        return ""
+    return (
+        f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
+        '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
+        'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
+        '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
+        '<div style="padding:10px 14px;">'
+        f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
+        '</div></details>'
+    )
 
 
 def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
@@ -1284,9 +1332,9 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
             polar_items = [(s, {"polarity": polarity_map.get(s)}) for s in sentence_lists[i]]
             topic_items = [(s, {"topic": topic_map.get(s)}) for s in sentence_lists[i]]
 
-            none_html = _wrap_review_card(review_label, f"{render_review_html(plain_items, mode='plain', label='')}{reb}", collapsible=True)
-            polar_html = _wrap_review_card(review_label, f"{render_review_html(polar_items, mode='polarity', label='')}{reb}", collapsible=True)
-            topic_html = _wrap_review_card(review_label, f"{render_review_html(topic_items, mode='topic', label='')}{reb}", collapsible=True)
+            none_html  = build_review_card(review_label, review_items=plain_items, mode="plain", rebuttal_html=reb)
+            polar_html = build_review_card(review_label, review_items=polar_items, mode="polarity", rebuttal_html=reb)
+            topic_html = build_review_card(review_label, review_items=topic_items, mode="topic", rebuttal_html=reb)
 
             none_out.append(gr.update(visible=True, value=none_html))
             agree_out.append(gr.update(visible=False, value=""))
@@ -1446,15 +1494,14 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
     agree_out = []
     for i in range(MAX_INTERACTIVE_REVIEWS):
         if i < len(sentence_lists):
-            # Get raw agreement content (no wrapping — we wrap manually to include rebuttal)
-            agreement_content = render_agreement_html(
-                sentence_lists[i], uniqueness, listener, speaker,
+            html_val = build_review_card(
+                f"Agreement in Review {i + 1}",
+                sentences=sentence_lists[i],
+                uniqueness=uniqueness, listener=listener, speaker=speaker,
                 num_reviews=num_reviews,
-                label="",  # no wrapping inside render_agreement_html
+                divergent_html=divergent_per_review.get(i, ""),
+                rebuttal_html=rebuttal_htmls[i],
             )
-            div = divergent_per_review.get(i, "")
-            reb = rebuttal_htmls[i]
-            html_val = _wrap_review_card(f"Agreement in Review {i + 1}", f"{agreement_content}{div}{reb}", collapsible=True)
             agree_out.append(gr.update(visible=show_agreement, value=html_val))
         else:
             agree_out.append(gr.update(visible=False, value=""))
@@ -1693,17 +1740,7 @@ with gr.Blocks(
                 rebuttal_html = ""
                 if isinstance(review_data, dict) and "sentences" in review_data:
                     review_item = list(review_data["sentences"].items())
-                    rebuttal = review_data.get("rebuttal", "")
-                    if rebuttal and rebuttal.strip():
-                        rebuttal_html = (
-                            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
-                            '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-                            'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-                            '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-                            '<div style="padding:10px 14px;">'
-                            f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{rebuttal}</div>'
-                            '</div></details>'
-                        )
+                    rebuttal_html = format_rebuttal_plain(review_data.get("rebuttal", ""))
                 else:
                     review_item = list(review_data.items())
                 review_sentence_lists.append([s for s, _ in review_item])
@@ -1773,33 +1810,21 @@ with gr.Blocks(
 
                     review_label = f"Review {i + 1}"
                     if show_consensuality:
-                        sentences_for_review = [s for s, _ in review_item]
-                        inner_html = render_agreement_html(
-                            sentences_for_review, consensuality_dict,
+                        html_content = build_review_card(
+                            review_label,
+                            sentences=[s for s, _ in review_item],
+                            uniqueness=consensuality_dict,
                             listener=prep_listener, speaker=prep_speaker,
                             num_reviews=number_of_displayed_reviews,
-                            label="",
-                        )
-                        # Append per-review divergent cards (if RSA data available)
-                        if i in divergent_per_review:
-                            inner_html += divergent_per_review[i]
-                    elif show_polarity:
-                        inner_html = render_review_html(
-                            review_item, mode="polarity", label="",
-                        )
-                    elif show_topic:
-                        inner_html = render_review_html(
-                            review_item, mode="topic", label="",
+                            divergent_html=divergent_per_review.get(i, ""),
+                            rebuttal_html=rebuttal_html,
                         )
                     else:
-                        inner_html = render_review_html(
-                            review_item, mode="plain", label="",
+                        m = "polarity" if show_polarity else ("topic" if show_topic else "plain")
+                        html_content = build_review_card(
+                            review_label, review_items=review_item, mode=m,
+                            rebuttal_html=rebuttal_html,
                         )
-
-                    # Wrap review content + rebuttal in a single collapsible card
-                    html_content = _wrap_review_card(
-                        review_label, f'{inner_html}{rebuttal_html}', collapsible=True
-                    )
 
                     agreement_updates.append(gr.update(visible=True, value=html_content))
                     # Rebuttal is now embedded in the review card, so hide the separate component
@@ -2174,9 +2199,7 @@ with gr.Blocks(
                 if t and t.strip():
                     sentences = [s for s in glimpse_tokenizer(t) if s.strip()]
                     plain_items = [(s, {}) for s in sentences]
-                    inner = render_review_html(plain_items, mode="plain", label="")
-                    reb = rebuttal_htmls[idx]
-                    html = _wrap_review_card(f"Review {idx + 1}", f"{inner}{reb}", collapsible=True)
+                    html = build_review_card(f"Review {idx + 1}", review_items=plain_items, mode="plain", rebuttal_html=rebuttal_htmls[idx])
                     none_out.append(gr.update(visible=True, value=html))
                 else:
                     none_out.append(gr.update(visible=False, value=""))
