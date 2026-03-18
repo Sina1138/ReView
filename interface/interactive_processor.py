@@ -20,7 +20,7 @@ import re
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from dependencies.rsa_reranker import RSAReranking
+from dependencies.rsa_reranker import RSARerankingCached as RSAReranking
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 from dependencies.sentence_filter import (
     is_section_header, is_noise_sentence, filter_and_clean_sentences,
