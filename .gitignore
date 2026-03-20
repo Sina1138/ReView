@@ -3,6 +3,8 @@ logs_and_guides/
 *.md
 !README.md
 !readme.md
+docs/
+knowledge_base/
 logs/
 .rtk/
 
