@@ -1575,6 +1575,18 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
 
 
 CUSTOM_CSS = """
+/* Force light theme — override dark mode from system/HF Spaces */
+:root, body, body.dark {
+    --body-background-fill: white !important;
+    --background-fill-primary: white !important;
+    --background-fill-secondary: #f9fafb !important;
+    --body-text-color: #1f2937 !important;
+    --block-background-fill: white !important;
+    --block-label-text-color: #374151 !important;
+    --input-background-fill: white !important;
+    --border-color-primary: #e5e7eb !important;
+    color-scheme: light !important;
+}
 .review-section-header h3 {
     color: #1e40af;
     border-left: 4px solid #3b82f6;
@@ -1688,8 +1700,15 @@ with gr.Blocks(
     css=CUSTOM_CSS,
     theme=gr.themes.Default(),
     js="""() => {
+        // Force light theme via Gradio's native __theme param
+        if (!window.location.search.includes('__theme=light')) {
+            var url = new URL(window.location);
+            url.searchParams.set('__theme', 'light');
+            history.replaceState(null, '', url);
+        }
         document.querySelector('body').classList.remove('dark');
         document.querySelector('body').dataset.theme = 'light';
+        document.documentElement.style.colorScheme = 'light';
         var btn = document.createElement('button');
         btn.id = 'back-to-top-btn';
         btn.textContent = '\\u2191 Top';
