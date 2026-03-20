@@ -1,16 +1,3 @@
-<!---
-title: ReView
-emoji: 📚
-colorFrom: green
-colorTo: blue
-sdk: gradio
-sdk_version: 6.9.0
-app_file: interface/Demo.py
-pinned: true
-license: mit
-short_description: Visualize and analyze scientific peer reviews
---->
-
 This is the repository of ReView: A Tool for Visualizing and Analyzing Scientific Reviews. [Code](https://github.com/sina1138/glimpse-ui) | [Hugging Face Spaces](https://huggingface.co/spaces/Sina1138/ReView)
 <!-- [Paper]() | -->
 
