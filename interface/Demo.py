@@ -1683,10 +1683,21 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 @keyframes agrslide { 0% { width:15%; margin-left:0; } 50% { width:35%; margin-left:50%; } 100% { width:15%; margin-left:85%; } }
 """
 
+# Build a theme where dark mode looks identical to light mode
+_theme = gr.themes.Default()
+_dark_overrides = {}
+for _attr in dir(_theme):
+    if _attr.endswith('_dark') and not _attr.startswith('_'):
+        _light_attr = _attr[:-5]
+        _light_val = getattr(_theme, _light_attr, None)
+        if _light_val is not None:
+            _dark_overrides[_attr] = _light_val
+_theme.set(**_dark_overrides)
+
 with gr.Blocks(
     title="ReView",
     css=CUSTOM_CSS,
-    theme=gr.themes.Default(),
+    theme=_theme,
     js="""() => {
         var btn = document.createElement('button');
         btn.id = 'back-to-top-btn';
