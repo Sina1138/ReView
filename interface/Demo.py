@@ -1640,7 +1640,7 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 #back-to-top-btn:hover { background: #f3f4f6; }
 
 /* Paper title heading style for interactive tab */
-.paper-title-heading textarea {
+.paper-title-heading, .paper-title-heading * {
     font-size: 1.17em !important;
     font-weight: 700 !important;
     color: #1f2937 !important;
@@ -2147,7 +2147,7 @@ with gr.Blocks(
 
         # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
-            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False, elem_classes=["paper-title-heading"])
+            paper_title_html = gr.HTML("", visible=False, elem_classes=["paper-title-heading"])
             back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
             view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
@@ -2398,7 +2398,7 @@ with gr.Blocks(
                 gr.update(visible=False),                              # input_section
                 gr.update(visible=True),                               # results_section
                 gr.update(visible=True),                               # back_to_input_btn
-                gr.update(visible=bool(title_text), value=title_text), # paper_title_html
+                gr.update(visible=bool(title_text), value=f'<span>{_html.escape(title_text)}</span>' if title_text else ""), # paper_title_html
                 gr.update(visible=False),                              # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity ⏳", "Topic ⏳", "Agreement ⏳"],
                            value="No Highlighting", interactive=True), # focus_radio
@@ -2522,6 +2522,17 @@ with gr.Blocks(
             ),
             inputs=[],
             outputs=[polarity_progress_html, focus_radio]
+        ).success(
+            fn=toggle_display_mode,
+            inputs=[focus_radio, interactive_review_count],
+            outputs=[
+                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
+                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
+                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
+                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+                most_divergent, most_common,
+                interactive_legend_html,
+            ]
         ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
