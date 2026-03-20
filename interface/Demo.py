@@ -2453,6 +2453,34 @@ with gr.Blocks(
                 gr.update(visible=has_general, value=general_formatted),  # general rebuttal display (only if exists)
             )
 
+        # Toggle display mode (No Highlighting / Polarity / Topic / Agreement[Processing])
+        def toggle_display_mode(focus, active_count):
+            # Strip ⏳ loading suffix — treat "Polarity ⏳" as "Polarity", etc.
+            effective_focus = focus.split(" ⏳")[0] if " ⏳" in focus else focus
+            # Legacy compat
+            if effective_focus == "Agreement (Processing)":
+                effective_focus = "Agreement"
+
+            updates = []
+            for mode in ["No Highlighting", "Polarity", "Topic", "Agreement"]:
+                for i in range(MAX_INTERACTIVE_REVIEWS):
+                    updates.append(gr.update(visible=(mode == effective_focus and i < active_count)))
+
+            # Most common shows in Agreement mode; most_divergent is now per-review (always hidden here)
+            show_opinions = effective_focus == "Agreement" and focus != "Agreement (Processing)"
+            updates.append(gr.update(visible=False))  # most_divergent (per-review now, always hidden)
+            updates.append(gr.update(visible=show_opinions))  # most_common
+
+            # Color legend
+            if effective_focus == "Polarity":
+                updates.append(gr.update(visible=True, value=_POLARITY_LEGEND))
+            elif effective_focus == "Topic":
+                updates.append(gr.update(visible=True, value=_TOPIC_LEGEND))
+            else:
+                updates.append(gr.update(visible=False, value=""))
+
+            return tuple(updates)
+
         fetch_reviews_button.click(
             fn=_validate_and_start_fetch,
             inputs=[openreview_link_input],
@@ -2639,34 +2667,6 @@ with gr.Blocks(
             )
             + '</div>'
         )
-
-        # Toggle display mode (No Highlighting / Polarity / Topic / Agreement[Processing])
-        def toggle_display_mode(focus, active_count):
-            # Strip ⏳ loading suffix — treat "Polarity ⏳" as "Polarity", etc.
-            effective_focus = focus.split(" ⏳")[0] if " ⏳" in focus else focus
-            # Legacy compat
-            if effective_focus == "Agreement (Processing)":
-                effective_focus = "Agreement"
-
-            updates = []
-            for mode in ["No Highlighting", "Polarity", "Topic", "Agreement"]:
-                for i in range(MAX_INTERACTIVE_REVIEWS):
-                    updates.append(gr.update(visible=(mode == effective_focus and i < active_count)))
-
-            # Most common shows in Agreement mode; most_divergent is now per-review (always hidden here)
-            show_opinions = effective_focus == "Agreement" and focus != "Agreement (Processing)"
-            updates.append(gr.update(visible=False))  # most_divergent (per-review now, always hidden)
-            updates.append(gr.update(visible=show_opinions))  # most_common
-
-            # Color legend
-            if effective_focus == "Polarity":
-                updates.append(gr.update(visible=True, value=_POLARITY_LEGEND))
-            elif effective_focus == "Topic":
-                updates.append(gr.update(visible=True, value=_TOPIC_LEGEND))
-            else:
-                updates.append(gr.update(visible=False, value=""))
-
-            return tuple(updates)
 
         focus_radio.change(
             fn=toggle_display_mode,
