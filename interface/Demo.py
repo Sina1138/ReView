@@ -1098,6 +1098,24 @@ def get_interactive_processor():
     return _interactive_processor
 
 
+@_gpu
+def _gpu_predict_polarity_topic(sentences: List[str]) -> Tuple[Dict, Dict]:
+    """Run polarity + topic inference on GPU. Decorated with @spaces.GPU for ZeroGPU."""
+    processor = get_interactive_processor()
+    processor.ensure_device()
+    polarity_map = processor.predict_polarity(sentences)
+    topic_map = processor.predict_topic(sentences)
+    return polarity_map, topic_map
+
+
+@_gpu
+def _gpu_predict_rsa(active_texts: List[str], progress_callback=None) -> Dict:
+    """Run RSA inference on GPU. Decorated with @spaces.GPU for ZeroGPU."""
+    processor = get_interactive_processor()
+    processor.ensure_device()
+    return processor.predict_rsa_full(*active_texts, progress_callback=progress_callback)
+
+
 MAX_INTERACTIVE_REVIEWS = 6
 
 
@@ -1352,8 +1370,7 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
 
         progress(0.30, desc="Predicting polarity and topics...")
         t0 = _time.time()
-        polarity_map = processor.predict_polarity(all_sentences)
-        topic_map = processor.predict_topic(all_sentences)
+        polarity_map, topic_map = _gpu_predict_polarity_topic(all_sentences)
         print(f"[TIMING] Polarity+Topic (sequential): {_time.time() - t0:.1f}s")
 
     print(f"[TIMING] Fast processing total: {_time.time() - t_start:.1f}s")
