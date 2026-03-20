@@ -581,10 +581,12 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
         print(f"[FETCH]   Got {len(forum_notes)} notes")
 
         # Extract title from submission note
-        title = "Unknown Paper"
+        title = ""
+        submission_patterns = ['Blind_Submission', '/Submission', 'submission', 'paper']
         for note in forum_notes:
             invitations = _get_invitations(note)
-            if any(p in inv for inv in invitations for p in ['Blind_Submission', '/Submission']):
+            inv_lower = [inv.lower() for inv in invitations]
+            if any(p.lower() in inv for inv in inv_lower for p in submission_patterns):
                 content = getattr(note, 'content', {})
                 t = _get_field(content, 'title')
                 if t:
@@ -592,17 +594,19 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
                     print(f"[FETCH]   Title: {title[:80]}")
                 break
         if not title:
-            # Fallback: look for any note with a title field (covers non-standard venues)
+            # Fallback: find the note whose forum == id (the root submission note)
             all_invitations = []
             for note in forum_notes:
-                invitations = _get_invitations(note)
-                all_invitations.extend(invitations)
-                content = getattr(note, 'content', {})
-                t = _get_field(content, 'title')
-                if t:
-                    title = t
-                    print(f"[FETCH]   Title (fallback): {title[:80]}")
-                    break
+                all_invitations.extend(_get_invitations(note))
+                note_id = getattr(note, 'id', None)
+                note_forum = getattr(note, 'forum', None)
+                if note_id and note_forum and note_id == note_forum:
+                    content = getattr(note, 'content', {})
+                    t = _get_field(content, 'title')
+                    if t:
+                        title = t
+                        print(f"[FETCH]   Title (root note): {title[:80]}")
+                        break
             if not title:
                 print(f"[FETCH]   No title found. Invitations seen: {all_invitations[:10]}")
 
