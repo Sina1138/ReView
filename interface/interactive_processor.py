@@ -591,6 +591,20 @@ def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
                     title = t
                     print(f"[FETCH]   Title: {title[:80]}")
                 break
+        if not title:
+            # Fallback: look for any note with a title field (covers non-standard venues)
+            all_invitations = []
+            for note in forum_notes:
+                invitations = _get_invitations(note)
+                all_invitations.extend(invitations)
+                content = getattr(note, 'content', {})
+                t = _get_field(content, 'title')
+                if t:
+                    title = t
+                    print(f"[FETCH]   Title (fallback): {title[:80]}")
+                    break
+            if not title:
+                print(f"[FETCH]   No title found. Invitations seen: {all_invitations[:10]}")
 
         # Extract reviews
         reviews = []

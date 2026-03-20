@@ -2534,6 +2534,17 @@ with gr.Blocks(
             inputs=[],
             outputs=[polarity_progress_html, focus_radio]
         ).success(
+            fn=toggle_display_mode,
+            inputs=[focus_radio, interactive_review_count],
+            outputs=[
+                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
+                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
+                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
+                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+                most_divergent, most_common,
+                interactive_legend_html,
+            ]
+        ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
             outputs=[submit_button]
