@@ -158,9 +158,10 @@ class InteractiveReviewProcessor:
     def ensure_device(self):
         """Move all models to the best available device.
 
-        On ZeroGPU, GPU only becomes available inside @spaces.GPU functions.
-        Call this at the start of inference to move models to GPU when available.
+        On ZeroGPU, GPU is managed transparently — skip manual device switching.
         """
+        if _ZERO_GPU:
+            return
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if device != self.device:
             print(f"[DEVICE] Switching models from {self.device} to {device}")
