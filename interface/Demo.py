@@ -1688,15 +1688,13 @@ with gr.Blocks(
     css=CUSTOM_CSS,
     theme=gr.themes.Default(),
     js="""() => {
-        // Force light theme via Gradio's native __theme param
+        // Force light theme via Gradio's native __theme param (real redirect so Gradio reads it)
         if (!window.location.search.includes('__theme=light')) {
             var url = new URL(window.location);
             url.searchParams.set('__theme', 'light');
-            history.replaceState(null, '', url);
+            window.location.replace(url);
+            return;
         }
-        document.querySelector('body').classList.remove('dark');
-        document.querySelector('body').dataset.theme = 'light';
-        document.documentElement.style.colorScheme = 'light';
         var btn = document.createElement('button');
         btn.id = 'back-to-top-btn';
         btn.textContent = '\\u2191 Top';
