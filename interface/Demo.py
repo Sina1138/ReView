@@ -1,6 +1,7 @@
 import sys, os.path
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 from collections import defaultdict
@@ -31,6 +32,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Lower = more vivid colors (0.2 = very strong, 1.0 = no amplification).
 # Asymmetric: unique/red (positive) is amplified less than common/blue (negative)
 # to avoid overwhelming red when most sentences are unique.
+# Module-level storage for background thread state (avoids pickling issues with ZeroGPU)
+_thread_states = {}
+
 AGREEMENT_AMP_UNIQUE = 1.0  # exponent for positive scores (red = unique)
 AGREEMENT_AMP_COMMON = 1.0  # exponent for negative scores (blue = common)
 MAX_PREPROCESSED_REVIEWS = 10  # Number of review/agreement/rebuttal slots in pre-processed tab
@@ -1298,12 +1302,14 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     t_start = _time.time()
 
     # Check if polarity+topic was already started in background by _show_raw_and_switch
-    if thread_state and isinstance(thread_state, dict) and thread_state.get("thread"):
-        bg_thread = thread_state["thread"]
-        _result = thread_state["result"]
-        sentence_lists = thread_state["sentence_lists"]
-        active_texts = thread_state["active_texts"]
-        all_sentences = thread_state["all_sentences"]
+    # thread_state is a string key into _thread_states dict (avoids pickling issues with ZeroGPU)
+    _bg_state = _thread_states.pop(thread_state, None) if isinstance(thread_state, str) else None
+    if _bg_state and _bg_state.get("thread"):
+        bg_thread = _bg_state["thread"]
+        _result = _bg_state["result"]
+        sentence_lists = _bg_state["sentence_lists"]
+        active_texts = _bg_state["active_texts"]
+        all_sentences = _bg_state["all_sentences"]
 
         progress(0.30, desc="Predicting polarity and topics...")
 
@@ -2351,7 +2357,8 @@ with gr.Blocks(
             bg_thread.start()
             print(f"[TIMING] Background polarity+topic thread started (page transitioning...)")
 
-            thread_state = {
+            thread_key = str(uuid.uuid4())
+            _thread_states[thread_key] = {
                 "thread": bg_thread,
                 "result": _thread_result,
                 "sentence_lists": sentence_lists,
@@ -2376,7 +2383,7 @@ with gr.Blocks(
                 active_count,                                          # interactive_review_count
                 rebuttal or "",                                        # interactive_rebuttal_state
                 gr.update(visible=False, value=""),                     # interactive_legend_html (reset on new submission)
-                thread_state,                                           # processing_thread_state
+                thread_key,                                             # processing_thread_state (just a string key now)
             )
 
         def _show_results_with_rebuttal(rebuttal, active_count):
