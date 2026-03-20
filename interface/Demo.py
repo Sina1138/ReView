@@ -1687,20 +1687,6 @@ with gr.Blocks(
     title="ReView",
     css=CUSTOM_CSS,
     theme=gr.themes.Default(),
-    head="""<script>
-        // Force light theme BEFORE Gradio initializes
-        localStorage.setItem("theme", "light");
-        // Override matchMedia so Gradio sees prefers-color-scheme: dark as false
-        var _origMatchMedia = window.matchMedia;
-        window.matchMedia = function(query) {
-            if (query === '(prefers-color-scheme: dark)') {
-                return {matches: false, media: query, onchange: null,
-                    addEventListener: function(){}, removeEventListener: function(){},
-                    addListener: function(){}, removeListener: function(){}, dispatchEvent: function(){ return true; }};
-            }
-            return _origMatchMedia.call(window, query);
-        };
-    </script>""",
     js="""() => {
         var btn = document.createElement('button');
         btn.id = 'back-to-top-btn';
