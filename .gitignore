@@ -1,7 +1,8 @@
 # project logs and guides
 logs_and_guides/
-!README.md
 *.md
+!README.md
+!readme.md
 logs/
 .rtk/
 
