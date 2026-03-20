@@ -1285,7 +1285,6 @@ def format_general_rebuttals(rebuttal: str) -> str:
     )
 
 
-@_gpu
 def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, rebuttal_str: str = "", thread_state=None, progress=gr.Progress()) -> Tuple:
     """
     Fast processing: Polarity + Topic only (~3-5 sec on CPU).
