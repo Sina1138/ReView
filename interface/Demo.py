@@ -1640,7 +1640,7 @@ html, body, .gradio-container, main, .contain { scroll-behavior: smooth !importa
 #back-to-top-btn:hover { background: #f3f4f6; }
 
 /* Paper title heading style for interactive tab */
-.paper-title-heading, .paper-title-heading * {
+.paper-title-heading textarea {
     font-size: 1.17em !important;
     font-weight: 700 !important;
     color: #1f2937 !important;
@@ -2147,7 +2147,7 @@ with gr.Blocks(
 
         # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
-            paper_title_html = gr.HTML("", visible=False, elem_classes=["paper-title-heading"])
+            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False, elem_classes=["paper-title-heading"])
             back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
             view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
@@ -2168,8 +2168,8 @@ with gr.Blocks(
                         interactive=True
                     )
                     fetch_reviews_button = gr.Button("Fetch & Process", variant="primary", interactive=True)
-                    openreview_title = gr.Textbox(label="Paper Title", interactive=False, visible=False, value="")
-                    openreview_rebuttal = gr.Textbox(label="💬 Author Rebuttal", interactive=False, visible=False, value="", lines=3)
+                    openreview_title = gr.State("")
+                    openreview_rebuttal = gr.State("")
 
                 with gr.Tab("Paste Reviews Manually"):
                     review1_textbox = gr.Textbox(lines=5, value=EXAMPLES[0], label="📝 Review 1", interactive=True)
@@ -2398,7 +2398,7 @@ with gr.Blocks(
                 gr.update(visible=False),                              # input_section
                 gr.update(visible=True),                               # results_section
                 gr.update(visible=True),                               # back_to_input_btn
-                gr.update(visible=bool(title_text), value=f'<span>{_html.escape(title_text)}</span>' if title_text else ""), # paper_title_html
+                gr.update(visible=bool(title_text), value=title_text), # paper_title_html
                 gr.update(visible=False),                              # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity ⏳", "Topic ⏳", "Agreement ⏳"],
                            value="No Highlighting", interactive=True), # focus_radio
