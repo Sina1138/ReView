@@ -1,14 +1,3 @@
----
-title: ReView
-emoji: 📝
-colorFrom: blue
-colorTo: purple
-sdk: gradio
-app_file: interface/Demo.py
-pinned: false
-hardware: zero-a10g
----
-
 This is the repository of ReView: A Tool for Visualizing and Analyzing Scientific Reviews. [Code](https://github.com/sina1138/glimpse-ui) | [Hugging Face Spaces](https://huggingface.co/spaces/Sina1138/ReView)
 <!-- [Paper]() | -->
 
@@ -97,3 +86,15 @@ python pipeline/fetch_iclr_data.py --year 2026
 ## Performance
 
 Since this project was built for deployment on Hugging Face Spaces, it is optimized to run on CPU. However, if better performance is needed, you can run this interface on a CUDA-enabled device and profit from the improved performance of the models in the interactive page. The code is set up to automatically use CUDA if available.
+
+
+# Information for Hugging Face Spaces
+---
+title: ReView
+emoji: 📝
+colorFrom: blue
+colorTo: green
+sdk: gradio
+app_file: interface/Demo.py
+pinned: true
+---
