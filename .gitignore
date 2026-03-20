@@ -8,6 +8,7 @@ logs/
 # validation, training, and benchmark files -- to be added back after
 validation/
 training/
+benchmark/
 benchmark_cpu_optimizations/
 
 # ========================================================================

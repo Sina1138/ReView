@@ -38,8 +38,8 @@ class Config:
     TOPIC_MODEL_LOCAL = BASE_DIR / "training" / "outputs" / "scideberta_topic" / "final_model"
 
     # HuggingFace fallbacks (if local models not available)
-    POLARITY_MODEL_HUB = "Sina1138/Scibert_polarity_Review"  # Legacy SciBERT (until fine-tuned DeBERTa is uploaded to Hub)
-    TOPIC_MODEL_HUB = "Sina1138/SciDeberta_Review"  # Current production model
+    POLARITY_MODEL_HUB = "Sina1138/deberta_polarity_Review"  # DeBERTa-v3-base (F1=0.764)
+    TOPIC_MODEL_HUB = "Sina1138/scideberta_topic_Review"  # SciDeBERTa (F1=0.478)
 
     # Legacy models (SciBERT baseline, kept for reference)
     POLARITY_MODEL_LEGACY = "Sina1138/Scibert_polarity_Review"  # F1=0.724

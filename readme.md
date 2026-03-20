@@ -1,3 +1,13 @@
+---
+title: ReView
+emoji: 📝
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+app_file: interface/Demo.py
+pinned: false
+hardware: zero-a10g
+---
 
 This is the repository of ReView: A Tool for Visualizing and Analyzing Scientific Reviews. [Code](https://github.com/sina1138/glimpse-ui) | [Hugging Face Spaces](https://huggingface.co/spaces/Sina1138/ReView)
 <!-- [Paper]() | -->
@@ -32,7 +42,7 @@ git lfs install
 - Finally, all remaining required packages could be installed with the requirements file:
 
 ``` bash
-pip install -r requirements
+pip install -r requirements.txt
 ```
 
 - (Optional) To enable fetching reviews directly from OpenReview links in the Interactive tab:

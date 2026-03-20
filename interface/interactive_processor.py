@@ -63,7 +63,13 @@ class InteractiveReviewProcessor:
     """Process reviews through the same pipeline as preprocessed data."""
 
     def __init__(self, device: str = "cuda"):
-        """Initialize processor with all required models."""
+        """Initialize processor with all required models.
+
+        Models always load on CPU at startup. On ZeroGPU (HF Spaces),
+        GPU is only available inside @spaces.GPU-decorated functions,
+        so use ensure_device() to move models to GPU dynamically.
+        """
+        # Always load on CPU — GPU may not be available yet (ZeroGPU)
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         t_total = time.time()
 
@@ -94,9 +100,8 @@ class InteractiveReviewProcessor:
             polarity_model_name = str(polarity_model_local)
             print(f"Loading polarity model from local trained model: {polarity_model_name}")
         else:
-            # Fallback: will need to upload fine-tuned model or use legacy SciBERT
-            polarity_model_name = "Sina1138/Scibert_polarity_Review"  # Legacy SciBERT
-            print(f"Local model not found, using legacy SciBERT: {polarity_model_name}")
+            polarity_model_name = "Sina1138/deberta_polarity_Review"
+            print(f"Local model not found, using HuggingFace: {polarity_model_name}")
 
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
@@ -114,8 +119,8 @@ class InteractiveReviewProcessor:
             topic_model_name = str(topic_model_local)
             print(f"Loading topic model from local trained model: {topic_model_name}")
         else:
-            topic_model_name = "Sina1138/SciDeberta_Review"  # Production HuggingFace model
-            print(f"Using HuggingFace topic model: {topic_model_name}")
+            topic_model_name = "Sina1138/scideberta_topic_Review"
+            print(f"Local model not found, using HuggingFace: {topic_model_name}")
 
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
@@ -139,6 +144,20 @@ class InteractiveReviewProcessor:
             7: None  # Unclassified
         }
 
+    def ensure_device(self):
+        """Move all models to the best available device.
+
+        On ZeroGPU, GPU only becomes available inside @spaces.GPU functions.
+        Call this at the start of inference to move models to GPU when available.
+        """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device != self.device:
+            print(f"[DEVICE] Switching models from {self.device} to {device}")
+            self.rsa_model.to(device)
+            self.polarity_model.to(device)
+            self.topic_model.to(device)
+            self.device = device
+
     @staticmethod
     def _normalize_uniqueness_scores(consensuality_scores):
         """IQR-based normalization: median-centered, clipped to [-1, 1]."""
@@ -161,6 +180,7 @@ class InteractiveReviewProcessor:
         if not sentences:
             return {}
 
+        self.ensure_device()
         t0 = time.time()
         n_batches = (len(sentences) + batch_size - 1) // batch_size
         print(f"[TIMING] Polarity: {len(sentences)} sentences, {n_batches} batches")
@@ -191,6 +211,7 @@ class InteractiveReviewProcessor:
         if not sentences:
             return {}
 
+        self.ensure_device()
         t0 = time.time()
         n_batches = (len(sentences) + batch_size - 1) // batch_size
         print(f"[TIMING] Topic: {len(sentences)} sentences, {n_batches} batches")
@@ -226,6 +247,8 @@ class InteractiveReviewProcessor:
         texts = [t for t in texts if t and t.strip()]
         if len(texts) < 2:
             return {}
+
+        self.ensure_device()
 
         # Tokenize all reviews
         all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
@@ -273,6 +296,8 @@ class InteractiveReviewProcessor:
         texts = [t for t in texts if t and t.strip()]
         if len(texts) < 2:
             return {}
+
+        self.ensure_device()
 
         all_sentence_lists = [[s for s in glimpse_tokenizer(t) if s.strip()] for t in texts]
         unique_sentences = list(set(s for lst in all_sentence_lists for s in lst))

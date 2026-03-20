@@ -220,7 +220,7 @@ def load_polarity_model(model_variant: str, base_dir: Path, device: str = "cuda"
         "scibert": "Sina1138/Scibert_polarity_Review",
         "scideberta": "KISTI-AI/Scideberta-full",  # Needs fine-tuning
         "modernbert": "answerdotai/ModernBERT-base",  # Needs fine-tuning
-        "deberta": "microsoft/deberta-v3-base",  # Needs fine-tuning
+        "deberta": "Sina1138/deberta_polarity_Review",  # DeBERTa-v3-base (F1=0.764)
         "deberta_v3_small": "microsoft/deberta-v3-small",  # Needs fine-tuning
     }
 
@@ -270,7 +270,7 @@ def load_topic_model(model_variant: str, base_dir: Path, device: str = "cuda"):
         "scideberta_legacy": base_dir / "alternative_topic" / "scideberta" / "final_model",
     }
     hub_fallback_map = {
-        "scideberta": "Sina1138/SciDeberta_Review",  # Production HuggingFace model
+        "scideberta": "Sina1138/scideberta_topic_Review",  # SciDeBERTa (F1=0.478)
         "scibert": "allenai/scibert_scivocab_uncased",  # Needs fine-tuning
         "deberta": "microsoft/deberta-v3-base",  # Needs fine-tuning
         "deberta_v3_small": "microsoft/deberta-v3-small",  # Needs fine-tuning
