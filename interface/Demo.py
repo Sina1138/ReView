@@ -1689,6 +1689,7 @@ with gr.Blocks(
     theme=gr.themes.Default(),
     js="""() => {
         document.querySelector('body').classList.remove('dark');
+        document.querySelector('body').dataset.theme = 'light';
         var btn = document.createElement('button');
         btn.id = 'back-to-top-btn';
         btn.textContent = '\\u2191 Top';
