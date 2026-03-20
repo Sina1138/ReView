@@ -2665,4 +2665,4 @@ with gr.Blocks(
 # Pre-load interactive processor models at startup so first request isn't slow
 get_interactive_processor()
 
-demo.launch(share=False)
+demo.launch(share=False, ssr_mode=False)
