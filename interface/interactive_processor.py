@@ -16,6 +16,13 @@ import pandas as pd
 import numpy as np
 import re
 
+# Detect ZeroGPU (HuggingFace Spaces) — CUDA can only be used inside @spaces.GPU functions
+try:
+    import spaces
+    _ZERO_GPU = True
+except ImportError:
+    _ZERO_GPU = False
+
 # Add parent directory to path
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
@@ -69,8 +76,12 @@ class InteractiveReviewProcessor:
         GPU is only available inside @spaces.GPU-decorated functions,
         so use ensure_device() to move models to GPU dynamically.
         """
-        # Always load on CPU — GPU may not be available yet (ZeroGPU)
-        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
+        # On ZeroGPU, CUDA must not be initialized in main process — force CPU
+        # GPU is only available inside @spaces.GPU decorated functions
+        if _ZERO_GPU:
+            self.device = torch.device("cpu")
+        else:
+            self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         t_total = time.time()
 
         # Set optimal thread count for SLURM environment
