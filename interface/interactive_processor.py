@@ -42,16 +42,6 @@ except ImportError:
     OPENREVIEW_AVAILABLE = False
 
 
-def _try_bettertransformer(model):
-    """Apply BetterTransformer (fused attention) if available. ~6% CPU speedup."""
-    try:
-        from optimum.bettertransformer import BetterTransformer
-        model = BetterTransformer.transform(model)
-        print(f"  BetterTransformer enabled for {model.__class__.__name__}")
-    except Exception:
-        pass
-    return model
-
 
 
 def _set_optimal_threads():
@@ -117,8 +107,9 @@ class InteractiveReviewProcessor:
         self.polarity_tokenizer = AutoTokenizer.from_pretrained(polarity_model_name)
         self.polarity_model = AutoModelForSequenceClassification.from_pretrained(polarity_model_name)
         self.polarity_model.to(self.device)
-        self.polarity_model = _try_bettertransformer(self.polarity_model)
         self.polarity_model.eval()
+        if not _ZERO_GPU:
+            self.polarity_model = torch.compile(self.polarity_model)
 
         print(f"[TIMING] Polarity model loaded in {time.time() - t0:.1f}s")
 
@@ -136,8 +127,9 @@ class InteractiveReviewProcessor:
         self.topic_tokenizer = AutoTokenizer.from_pretrained(topic_model_name)
         self.topic_model = AutoModelForSequenceClassification.from_pretrained(topic_model_name)
         self.topic_model.to(self.device)
-        self.topic_model = _try_bettertransformer(self.topic_model)
         self.topic_model.eval()
+        if not _ZERO_GPU:
+            self.topic_model = torch.compile(self.topic_model)
 
         print(f"[TIMING] Topic model loaded in {time.time() - t0:.1f}s")
 
@@ -194,22 +186,31 @@ class InteractiveReviewProcessor:
 
         self.ensure_device()
         t0 = time.time()
-        n_batches = (len(sentences) + batch_size - 1) // batch_size
-        print(f"[TIMING] Polarity: {len(sentences)} sentences, {n_batches} batches")
-        all_preds = []
-        for i in range(0, len(sentences), batch_size):
-            batch = sentences[i:i + batch_size]
-            inputs = self.polarity_tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=256
-            ).to(self.device)
 
+        # Dynamic padding: pre-tokenize to get lengths, sort by length, batch similar lengths
+        encoded = self.polarity_tokenizer(sentences, truncation=True, max_length=256, add_special_tokens=True)
+        lengths = [len(ids) for ids in encoded["input_ids"]]
+        sorted_indices = sorted(range(len(sentences)), key=lambda i: lengths[i])
+
+        n_batches = math.ceil(len(sentences) / batch_size)
+        print(f"[TIMING] Polarity: {len(sentences)} sentences, {n_batches} batches (dynpad)")
+
+        sorted_preds = []
+        for i in range(0, len(sorted_indices), batch_size):
+            batch_indices = sorted_indices[i:i + batch_size]
+            batch = [sentences[j] for j in batch_indices]
+            inputs = self.polarity_tokenizer(
+                batch, return_tensors="pt", padding=True,
+                truncation=True, max_length=256,
+            ).to(self.device)
             with torch.no_grad():
                 logits = self.polarity_model(**inputs).logits
-                all_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
+                sorted_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
+
+        # Unshuffle to original order
+        all_preds = [0] * len(sentences)
+        for rank, orig_idx in enumerate(sorted_indices):
+            all_preds[orig_idx] = sorted_preds[rank]
 
         print(f"[TIMING] Polarity done in {time.time() - t0:.1f}s")
         emoji_map = {0: "➖", 1: None, 2: "➕"}
@@ -225,22 +226,31 @@ class InteractiveReviewProcessor:
 
         self.ensure_device()
         t0 = time.time()
-        n_batches = (len(sentences) + batch_size - 1) // batch_size
-        print(f"[TIMING] Topic: {len(sentences)} sentences, {n_batches} batches")
-        all_preds = []
-        for i in range(0, len(sentences), batch_size):
-            batch = sentences[i:i + batch_size]
-            inputs = self.topic_tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=256
-            ).to(self.device)
 
+        # Dynamic padding: pre-tokenize to get lengths, sort by length, batch similar lengths
+        encoded = self.topic_tokenizer(sentences, truncation=True, max_length=256, add_special_tokens=True)
+        lengths = [len(ids) for ids in encoded["input_ids"]]
+        sorted_indices = sorted(range(len(sentences)), key=lambda i: lengths[i])
+
+        n_batches = math.ceil(len(sentences) / batch_size)
+        print(f"[TIMING] Topic: {len(sentences)} sentences, {n_batches} batches (dynpad)")
+
+        sorted_preds = []
+        for i in range(0, len(sorted_indices), batch_size):
+            batch_indices = sorted_indices[i:i + batch_size]
+            batch = [sentences[j] for j in batch_indices]
+            inputs = self.topic_tokenizer(
+                batch, return_tensors="pt", padding=True,
+                truncation=True, max_length=256,
+            ).to(self.device)
             with torch.no_grad():
                 logits = self.topic_model(**inputs).logits
-                all_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
+                sorted_preds.extend(torch.argmax(logits, dim=1).cpu().tolist())
+
+        # Unshuffle to original order
+        all_preds = [0] * len(sentences)
+        for rank, orig_idx in enumerate(sorted_indices):
+            all_preds[orig_idx] = sorted_preds[rank]
 
         print(f"[TIMING] Topic done in {time.time() - t0:.1f}s")
         return dict(zip(sentences, [self.id2topic.get(p, None) for p in all_preds]))
