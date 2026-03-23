@@ -302,88 +302,6 @@ def render_review_html(
     return content
 
 
-def format_summary_cards(
-    sentences: list,
-    scores: dict,
-    sentence_lists: list,
-    card_type: str = "common",
-    listener: dict = None,
-    speaker: dict = None,
-) -> str:
-    """
-    Most Common Opinions hub.
-
-    Selection: When listener/speaker data is available, re-ranks candidates by
-    informativeness × (1 − normalized_uniqueness) so substantive agreements
-    surface above generic filler. Falls back to the raw score order when the
-    full RSA data is not available (pre-processed tab).
-
-    Each card shows:
-    - L_t(d|s) distribution bars (R1 40% · R2 45% · R3 15%) when data is available
-    - Context snippet (1 sentence before / after)
-    - Clickable to scroll to the sentence in the full review below
-    """
-    if not sentences:
-        return ""
-
-    border_color = "#93c5fd"
-    badge_bg = "#dbeafe"
-    badge_fg = "#1e40af"
-
-    # Pre-compute expected listener share per reviewer from review lengths.
-    # Used for bar chart normalization (bar width = deviation from expected, not raw prob).
-    num_reviews = len(sentence_lists)
-    total_sents = sum(len(sl) for sl in sentence_lists) or 1
-    expected_share = {
-        f"R{i+1}": len(sl) / total_sents
-        for i, sl in enumerate(sentence_lists)
-    }
-
-    # Render in the order given — selection and filtering happens in compute_rsa_in_background.
-    ctx_style = "color:#b0b0b0;font-size:0.85em;font-style:italic;"
-    cards_parts = []
-
-    for sent in sentences:
-        sent_id = _make_sentence_id(sent)
-        context_before, context_after = _get_context(sent, sentence_lists)
-
-        # --- Source badge: which review(s) this sentence physically appears in ---
-        source_badge = _source_badges_html(sent, sentence_lists)
-
-        # --- L_t(d|s) distribution bars ---
-        dist_html = _listener_dist_bars(sent, listener, source_badge, badge_fg=badge_fg)
-
-        onclick = _click_to_scroll_js(sent_id)
-
-        # Inline context: ...before SENTENCE after...  (all one line)
-        before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
-        after_span = f'<span style="{ctx_style}"> {_html.escape(context_after)}...</span>' if context_after else ""
-
-        cards_parts.append(
-            f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-            f'border-radius:6px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" '
-            f'onclick="{_html.escape(onclick)}">'
-            f'{dist_html}'
-            f'<div style="color:#111827;line-height:1.5;">'
-            f'{before_span}'
-            f'<span style="font-weight:500;">{_html.escape(sent)}</span>'
-            f'{after_span}'
-            f'</div>'
-            f'</div>'
-        )
-
-    # Wrap in collapsible <details> (open by default)
-    inner = "".join(cards_parts)
-    return (
-        f'<details open style="margin-bottom:8px;">'
-        f'<summary style="cursor:pointer;font-weight:600;font-size:0.9em;color:#374151;'
-        f'margin-bottom:6px;list-style:none;">'
-        f'<span style="margin-right:4px;">▸</span>Most Common Opinions</summary>'
-        f'{inner}'
-        f'</details>'
-    )
-
-
 def _normalize_polarity(val) -> Optional[str]:
     """Normalize polarity from any format to 'positive'/'negative'/None."""
     if val == "➕" or val == 2 or val == "positive":
@@ -943,7 +861,6 @@ def _load_paper_titles() -> dict:
     return titles
 
 _paper_titles = _load_paper_titles()
-year_range_str = f"{min(years)}–{max(years)}" if years else "N/A"
 
 # -----------------------------------
 # Pre-processed Tab
@@ -978,59 +895,11 @@ topic_color_map = {
 }
 
 
-# GLIMPSE Home/Description Page
-glimpse_description = f"""
-# ReView: A Tool for Visualizing and Analyzing Scientific Reviews
-## **Overview**
-ReView is a visualization tool designed to assist **area chairs** and **researchers** in efficiently analyzing scholarly reviews. The interface offers two main ways to explore scholarly reviews:
-- Pre-Processed Reviews: Explore real peer reviews from ICLR ({year_range_str}) with structured visualizations of sentiment, topics, and reviewer agreement.
-- Interactive Tab: Enter your own reviews and view them analyzed in real time using the same NLP-powered highlighting options.
-All reviews are shown in their original, unaltered form, with visual overlays to help identify key insights such as disagreements, sentiment and common themes—reducing cognitive load and scrolling effort.
----
-## **Key Features**
-- *Traceability and Transparency:* The tool preserves the original text of each review and overlays highlights for key aspects (e.g., sentiment, topic, agreement), allowing area chairs to trace back every insight to its source without modifying or summarizing the content.
-- *Structured Overview*: All reviews are displayed in one interface and with radio buttons, one can navigate from one highlighting option to the other.
-- *Interactive*: The tool allows users to input their own reviews and, within seconds, view them annotated with highlighted aspects
----
-## **Highlighting Options**
-- *Agreement:* Identifies both shared and conflicting points across reviews, helping to surface consensus and disagreement.
-- *Polarity:* Highlights positive and negative sentiments within the reviews to reveal tone and stance.
-- *Topic:* Organizes the review sentences by their discussed topics, ensuring coverage of diverse reviewer perspectives and improving clarity.
----
-### How to Use ReView
-ReView offers two main ways to explore peer reviews: using pre-processed reviews or by entering your own.
-#### Pre-Processed Reviews Tab
-Use this tab to explore reviews from ICLR ({year_range_str}):
-1. **Select a conference year** from the dropdown menu on the right.
-2. **Navigate between submissions** using the *Next* and *Previous* buttons on the left.
-3. **Choose a highlighting view** using the radio buttons:
-   - **Original**: Displays unmodified review text.
-   - **Agreement**: Highlights consensus points in **red** and disagreements in **purple**.
-   - **Polarity**: Highlights **positive** sentiment in **green** and **negative** sentiment in **red**.
-   - **Topic**: Highlights comments by discussion topic using color-coded labels.
-#### Interactive Tab
-Use this tab to analyze your own review text:
-1. **Enter 2–6 reviews** in the input fields. Use the **➕ Add Review** button to add up to 6 reviews.
-2. **Click "Process"** to analyze the input (average processing time: ~42 seconds).
-3. **Explore the results** using the same highlighting options as above (Agreement, Polarity, Topic).
-"""
-
-
 EXAMPLES = [
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. I believe the authors missed Jane and al 2021. In addition, I think, there is a mistake in the math.",
     "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
     "The paper gives really interesting insights on the topic of transfer learning. It is not well presented and lack experiments. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
 ]
-
-PROCESSING_TIMER_HTML = """
-<div style="display:flex;align-items:center;gap:12px;padding:16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
-  <div style="width:24px;height:24px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-  <div>
-    <div style="font-weight:600;color:#312e81;">Processing reviews...</div>
-  </div>
-</div>
-<style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
-"""
 
 FETCHING_HTML = """
 <div style="display:flex;align-items:center;gap:12px;padding:16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
@@ -1106,14 +975,6 @@ def _gpu_predict_polarity_topic(sentences: List[str]) -> Tuple[Dict, Dict]:
     polarity_map = processor.predict_polarity(sentences)
     topic_map = processor.predict_topic(sentences)
     return polarity_map, topic_map
-
-
-@_gpu
-def _gpu_predict_rsa(active_texts: List[str], progress_callback=None) -> Dict:
-    """Run RSA inference on GPU. Decorated with @spaces.GPU for ZeroGPU."""
-    processor = get_interactive_processor()
-    processor.ensure_device()
-    return processor.predict_rsa_full(*active_texts, progress_callback=progress_callback)
 
 
 MAX_INTERACTIVE_REVIEWS = 6
@@ -1788,16 +1649,12 @@ with gr.Blocks(
             
             if show_polarity:
                 color_map = {"➕": "#d4fcd6", "➖": "#fcd6d6"}
-                legend = False
             elif show_topic:
-                color_map = topic_color_map  # No color map for topics
-                legend = False
+                color_map = topic_color_map
             elif show_consensuality:
                 color_map = None  # Continuous scale, no predefined colors
-                legend = True
             else:
                 color_map = {}  # Default to empty map
-                legend = False
 
             current_id = review_ids[current_index]
             # Primary source: raw CSV lookup (processed CSVs lack paper_title)
@@ -2411,46 +2268,6 @@ with gr.Blocks(
                 rebuttal or "",                                        # interactive_rebuttal_state
                 gr.update(visible=False, value=""),                     # interactive_legend_html (reset on new submission)
                 thread_key,                                             # processing_thread_state (just a string key now)
-            )
-
-        def _show_results_with_rebuttal(rebuttal, active_count):
-            # Generate per-review rebuttals
-            per_review = []
-            has_per_review = False
-            for i in range(1, 7):
-                formatted = format_rebuttal_for_review(rebuttal or "", i)
-                if formatted:
-                    has_per_review = True
-                per_review.append(gr.update(visible=bool(formatted), value=formatted))
-
-            # Generate general rebuttal section (only for rebuttals not tied to specific reviews)
-            general_formatted = format_general_rebuttals(rebuttal or "")
-            has_general = bool(general_formatted)
-
-            # Toggle bar: jump buttons (left) + collapse toggles (right)
-            has_any = has_per_review or has_general
-            right_buttons = [_review_toggle_html()]
-            if has_any:
-                right_buttons.append(_rebuttal_toggle_html())
-            toggle_bar = (
-                '<div style="display:flex;align-items:center;gap:8px;">'
-                '<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
-                + _jump_buttons_html(active_count)
-                + '<span style="flex:1;"></span>'
-                + "".join(right_buttons) + '</div>'
-            )
-            toggle_update = gr.update(visible=True, value=toggle_bar)
-
-            return (
-                gr.update(visible=False),   # input_section
-                gr.update(visible=True),    # results_section
-                gr.update(value=AGREEMENT_PROGRESS_HTML, visible=True),  # agreement_progress_html (in results_section)
-                gr.update(visible=True),    # back_to_input_btn
-                gr.update(visible=False),   # view_results_btn
-                gr.update(choices=["No Highlighting", "Polarity", "Topic", "Agreement (Processing)"], value="No Highlighting"),
-                toggle_update,  # rebuttal toggle button
-                *per_review,  # 6 per-review rebuttal components
-                gr.update(visible=has_general, value=general_formatted),  # general rebuttal display (only if exists)
             )
 
         # Toggle display mode (No Highlighting / Polarity / Topic / Agreement[Processing])

@@ -177,47 +177,6 @@ def preprocessed_scores(
     return scored_reviews, rsa_cache
 
 
-def save_all_scored_reviews(
-        start_year: int = 2017,
-        end_year: int = 2021,
-        input_dir: Path = BASE_DIR / "glimpse" / "data" / "processed",
-        raw_data_dir: Path = BASE_DIR / "data",
-        scored_csv_dir: Path = BASE_DIR / "data",
-        polarity_dir: Path = BASE_DIR / "data" / "polarity_scored",
-        topic_dir: Path = BASE_DIR / "data" / "topic_scored",
-        output_csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews.csv",
-    ):
-
-    all_scored_reviews = []
-
-    for year in range(start_year, end_year + 1):
-        print(f"Processing {year}...")
-        try:
-            original_csv_path = input_dir / f"all_reviews_{year}.csv"
-            raw_data_csv_path = raw_data_dir / f"all_reviews_{year}.csv"
-            polarity_csv_path = polarity_dir / f"polarity_scored_reviews_{year}.csv"
-            topic_csv_path = topic_dir / f"topic_scored_reviews_{year}.csv"
-            scored_csv_path = scored_csv_dir / f"GLIMPSE_results_{year}.csv"
-            scored_reviews, _ = preprocessed_scores(
-                original_csv_path,
-                scored_csv_path,
-                polarity_csv_path,
-                topic_csv_path,
-                raw_data_csv_path
-            )
-            all_scored_reviews.append({
-                "year": year,
-                "scored_dict": scored_reviews
-            })
-
-        except Exception as e:
-            print(f"Skipped {year} due to error: {e}")
-
-    df = pd.DataFrame(all_scored_reviews)
-    df.to_csv(output_csv_path, index=False)
-    print(f"All scored reviews saved to '{output_csv_path}'.")
-
-
 def load_scored_reviews(csv_path: Path = BASE_DIR / "data" / "preprocessed_scored_reviews.csv") -> tuple:
     df = pd.read_csv(csv_path)
     tqdm.pandas(desc="Parsing scored_dict")
@@ -333,10 +292,6 @@ def build_dataset(
     print(f"\n✓ Dataset saved to: {output_csv_path}")
     print(f"  Years included: {min(years)}-{max(years)}")
     print(f"  File size: {output_csv_path.stat().st_size / 1024 / 1024:.1f} MB")
-
-
-# Backwards-compatible alias
-build_2020_2025_dataset = build_dataset
 
 
 if __name__ == "__main__":

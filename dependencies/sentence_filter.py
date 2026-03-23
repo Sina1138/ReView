@@ -70,11 +70,6 @@ _RATING_RE = re.compile(
 # Public API
 # ---------------------------------------------------------------------------
 
-def is_section_header(sentence: str) -> bool:
-    """Return True if sentence is a standalone structural section header."""
-    return bool(_HEADER_RE.match(sentence.strip()))
-
-
 def is_noise_sentence(sentence: str) -> bool:
     """
     Return True if the sentence is structural noise that should be excluded

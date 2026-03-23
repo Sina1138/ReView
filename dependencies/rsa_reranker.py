@@ -14,14 +14,6 @@ def kl_divergence(p, q):
     return torch.nan_to_num(p * (p / q).log(), nan=0.0).sum(-1)
 
 
-def jensen_shannon_divergence(p, q):
-    """
-    Compute the Jensen-Shannon divergence between two distributions
-    """
-    m = 0.5 * (p + q)
-    return 0.5 * (kl_divergence(p, m) + kl_divergence(q, m))
-
-
 class RSAReranking:
     """
     Rerank a list of candidates according to the RSA model.
@@ -408,22 +400,4 @@ class RSARerankingCached(RSAReranking):
         return likelihood_matrix
 
 
-class RSARerankingEmbedder(RSAReranking):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def compute_embeddings(self, x: List[str], y: List[str], **kwargs):
-        model_kwargs = kwargs.get("model_kwargs")
-
-        # shape: (batch_size, embedding_dim)
-        x_embeddings = self.model.encode(x, **model_kwargs)
-        y_embeddings = self.model.encode(y, **model_kwargs)
-
-        # dot product between the embeddings : shape (batch_size)
-        dot_products = (x_embeddings * y_embeddings).sum(-1)
-
-        return dot_products
-
-    def score(self, x: List[str], y: List[str], **kwargs):
-        return self.compute_embeddings(x, y, **kwargs)
 

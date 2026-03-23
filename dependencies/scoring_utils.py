@@ -299,4 +299,3 @@ TOPIC_ID_TO_LABEL = {
     7: "NONE",
 }
 
-TOPIC_LABEL_TO_ID = {v: k for k, v in TOPIC_ID_TO_LABEL.items()}

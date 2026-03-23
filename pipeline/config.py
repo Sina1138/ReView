@@ -41,9 +41,6 @@ class Config:
     POLARITY_MODEL_HUB = "Sina1138/deberta_polarity_Review"  # DeBERTa-v3-base (F1=0.764)
     TOPIC_MODEL_HUB = "Sina1138/scideberta_topic_Review"  # SciDeBERTa (F1=0.478)
 
-    # Legacy models (SciBERT baseline, kept for reference)
-    POLARITY_MODEL_LEGACY = "Sina1138/Scibert_polarity_Review"  # F1=0.724
-
     # Use local models if available, otherwise fall back to hub
     POLARITY_MODEL = str(POLARITY_MODEL_LOCAL) if POLARITY_MODEL_LOCAL.exists() else POLARITY_MODEL_HUB
     TOPIC_MODEL = str(TOPIC_MODEL_LOCAL) if TOPIC_MODEL_LOCAL.exists() else TOPIC_MODEL_HUB

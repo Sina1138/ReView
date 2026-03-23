@@ -30,8 +30,8 @@ sys.path.insert(0, str(BASE_DIR))
 from dependencies.rsa_reranker import RSARerankingCached as RSAReranking
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 from dependencies.sentence_filter import (
-    is_section_header, is_noise_sentence, filter_and_clean_sentences,
-    strip_header_prefix, HIGHLIGHT_THRESHOLD,
+    is_noise_sentence, filter_and_clean_sentences,
+    strip_header_prefix,
 )
 
 # Try to import OpenReview, but don't fail if not available
@@ -369,142 +369,6 @@ class InteractiveReviewProcessor:
             "speaker": speaker,
             "best_rsa": best_rsa,
         }
-
-    def format_highlighted_output(
-        self,
-        sentences: List[str],
-        scores_dict: Dict[str, float],
-        score_type: str = "consensuality"
-    ) -> List[Tuple[str, Optional[float]]]:
-        """
-        Format output for HighlightedText component.
-
-        Args:
-            sentences: List of sentences in order
-            scores_dict: Dictionary mapping sentences to scores
-            score_type: "none", "consensuality", "polarity", or "topic"
-
-        Returns:
-            List of (sentence, score) tuples
-        """
-        if score_type == "none":
-            # Show original text without any highlighting/scores
-            return [(s, None) for s in sentences]
-        elif score_type == "consensuality":
-            return [
-                (s, scores_dict.get(s, 0.0)
-                 if isinstance(scores_dict.get(s), (int, float))
-                    and abs(scores_dict.get(s, 0.0)) >= HIGHLIGHT_THRESHOLD
-                 else None)
-                for s in sentences
-            ]
-        else:  # polarity or topic
-            return [
-                (s, scores_dict.get(s, None))
-                for s in sentences
-            ]
-
-    def process_reviews_fast(self, *reviews: str) -> Dict:
-        """
-        Process reviews WITHOUT RSA (fast path: ~3-5 sec on CPU).
-
-        Returns polarity + topic scores immediately.
-        RSA can be computed separately in background.
-
-        Args:
-            reviews: Review texts (at least 2 required)
-
-        Returns:
-            Dictionary with polarity + topic scores (consensuality empty)
-        """
-        reviews = [r for r in reviews if r and r.strip()]
-        if len(reviews) < 2:
-            raise ValueError("At least two non-empty reviews are required")
-
-        # Tokenize reviews
-        sentence_lists = [[s for s in glimpse_tokenizer(r) if s.strip()] for r in reviews]
-
-        if any(len(sl) == 0 for sl in sentence_lists):
-            raise ValueError("One or more reviews have no valid sentences")
-
-        # Get unique sentences, filtering out noise (headers, citations, short fragments, etc.)
-        all_sentences = filter_and_clean_sentences(
-            list(set(s for sl in sentence_lists for s in sl))
-        )
-
-        # Predict scores (skip consensuality - that comes async)
-        polarity_map = self.predict_polarity(all_sentences)
-        topic_map = self.predict_topic(all_sentences)
-
-        # Return with empty consensuality (will be updated async)
-        result = {
-            f"review{i+1}_sentences": sl for i, sl in enumerate(sentence_lists)
-        }
-        result.update({
-            "consensuality_scores": {},
-            "polarity_scores": polarity_map,
-            "topic_scores": topic_map,
-        })
-        result["most_common"] = []
-        result["most_unique"] = []
-
-        return result
-
-    def process_reviews(
-        self,
-        *reviews: str,
-        focus: str = "Agreement"
-    ) -> Dict:
-        """
-        Process 2-6 reviews and return scored output.
-
-        Args:
-            reviews: Review texts (at least 2 required)
-            focus: "Agreement", "Polarity", or "Topic"
-
-        Returns:
-            Dictionary with formatted output for all reviews
-        """
-        reviews = [r for r in reviews if r and r.strip()]
-        if len(reviews) < 2:
-            raise ValueError("At least two non-empty reviews are required")
-
-        # Tokenize reviews
-        sentence_lists = [[s for s in glimpse_tokenizer(r) if s.strip()] for r in reviews]
-
-        if any(len(sl) == 0 for sl in sentence_lists):
-            raise ValueError("One or more reviews have no valid sentences")
-
-        # Get unique sentences, filtering out noise (headers, citations, short fragments, etc.)
-        all_sentences = filter_and_clean_sentences(
-            list(set(s for sl in sentence_lists for s in sl))
-        )
-
-        # Predict scores
-        polarity_map = self.predict_polarity(all_sentences)
-        topic_map = self.predict_topic(all_sentences)
-        consensuality_map = self.predict_consensuality(*reviews)
-
-        # Prepare output based on focus
-        result = {
-            f"review{i+1}_sentences": sl for i, sl in enumerate(sentence_lists)
-        }
-        result.update({
-            "consensuality_scores": consensuality_map,
-            "polarity_scores": polarity_map,
-            "topic_scores": topic_map,
-        })
-
-        # Calculate most common and unique sentences
-        if consensuality_map:
-            scores_series = pd.Series(consensuality_map)
-            result["most_common"] = scores_series.nlargest(3).index.tolist()
-            result["most_unique"] = scores_series.nsmallest(3).index.tolist()
-        else:
-            result["most_common"] = []
-            result["most_unique"] = []
-
-        return result
 
 
 def fetch_reviews_from_openreview_link(link: str) -> Tuple[List[str], str]:
