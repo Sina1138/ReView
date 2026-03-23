@@ -2147,7 +2147,7 @@ with gr.Blocks(
 
         # ---- TOP TOGGLE BAR (always visible) ----
         with gr.Row():
-            paper_title_html = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False, elem_classes=["paper-title-heading"])
+            paper_title = gr.Textbox("", visible=False, interactive=False, show_label=False, container=False, elem_classes=["paper-title-heading"])
             back_to_input_btn = gr.Button("✏️ Edit Reviews / New Input", visible=False, variant="secondary")
             view_results_btn = gr.Button("📊 View Results", visible=False, variant="secondary")
 
@@ -2398,7 +2398,7 @@ with gr.Blocks(
                 gr.update(visible=False),                              # input_section
                 gr.update(visible=True),                               # results_section
                 gr.update(visible=True),                               # back_to_input_btn
-                gr.update(visible=bool(title_text), value=title_text), # paper_title_html
+                gr.update(visible=bool(title_text), value=title_text), # paper_title
                 gr.update(visible=False),                              # view_results_btn
                 gr.update(choices=["No Highlighting", "Polarity ⏳", "Topic ⏳", "Agreement ⏳"],
                            value="No Highlighting", interactive=True), # focus_radio
@@ -2503,7 +2503,7 @@ with gr.Blocks(
             inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
                     openreview_rebuttal, openreview_title],
             outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                     input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn, focus_radio,
+                     input_section, results_section, back_to_input_btn, paper_title, view_results_btn, focus_radio,
                      polarity_progress_html, agreement_progress_html,
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
@@ -2553,7 +2553,7 @@ with gr.Blocks(
             inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
                     paste_rebuttal, no_title_state],
             outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                     input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn, focus_radio,
+                     input_section, results_section, back_to_input_btn, paper_title, view_results_btn, focus_radio,
                      polarity_progress_html, agreement_progress_html,
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
@@ -2603,7 +2603,7 @@ with gr.Blocks(
                 gr.update(visible=True),    # show "view results"
             ),
             inputs=[],
-            outputs=[input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn]
+            outputs=[input_section, results_section, back_to_input_btn, paper_title, view_results_btn]
         )
 
         # Top bar: View Results (toggle back without re-processing)
@@ -2616,7 +2616,7 @@ with gr.Blocks(
                 gr.update(visible=False),   # hide "view results"
             ),
             inputs=[],
-            outputs=[input_section, results_section, back_to_input_btn, paper_title_html, view_results_btn]
+            outputs=[input_section, results_section, back_to_input_btn, paper_title, view_results_btn]
         )
 
         # Clear button
@@ -2648,7 +2648,7 @@ with gr.Blocks(
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 1-3
                 gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 4-6
                 gr.update(visible=False, value=""),  # consolidated rebuttal
-                gr.update(visible=False, value=""),  # paper_title_html
+                gr.update(visible=False, value=""),  # paper_title
                 gr.update(visible=False, value=""),  # polarity_progress_html
                 gr.update(visible=False, value=""),  # agreement_progress_html
             ),
@@ -2657,7 +2657,7 @@ with gr.Blocks(
                      interactive_rebuttal_toggle,
                      rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
                      rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, paper_title_html,
+                     interactive_rebuttal_display, paper_title,
                      polarity_progress_html, agreement_progress_html]
         )
 
