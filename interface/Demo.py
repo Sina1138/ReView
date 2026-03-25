@@ -4,12 +4,6 @@ import time
 import uuid
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
-from collections import defaultdict
-import hashlib
-import json
-import math
-import re as _re
-import html as _html
 import torch
 import numpy as np
 import gradio as gr
@@ -28,780 +22,26 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Controls how aggressively agreement colors are amplified.
-# Lower = more vivid colors (0.2 = very strong, 1.0 = no amplification).
-# Asymmetric: unique/red (positive) is amplified less than common/blue (negative)
-# to avoid overwhelming red when most sentences are unique.
+from interface.constants import (
+    MAX_PREPROCESSED_REVIEWS, MAX_INTERACTIVE_REVIEWS,
+    DISPLAY_MODES, TOPIC_COLOR_MAP, TOPIC_HTML_COLORS,
+    CUSTOM_CSS, EXAMPLES,
+    FETCHING_HTML, POLARITY_PROGRESS_HTML, AGREEMENT_PROGRESS_HTML,
+    POLARITY_LEGEND, TOPIC_LEGEND,
+)
+from interface.renderers import (
+    build_review_card, format_common_themes, format_divergent_cards,
+    format_rebuttal_plain, format_rebuttal_for_review, format_general_rebuttals,
+    render_status, render_agreement_progress,
+    review_toggle_html, rebuttal_toggle_html, jump_buttons_html,
+    is_review_header,
+)
+
 # Module-level storage for background thread state (avoids pickling issues with ZeroGPU)
 _thread_states = {}
 
-AGREEMENT_AMP_UNIQUE = 1.0  # exponent for positive scores (red = unique)
-AGREEMENT_AMP_COMMON = 1.0  # exponent for negative scores (blue = common)
-MAX_PREPROCESSED_REVIEWS = 10  # Number of review/agreement/rebuttal slots in pre-processed tab
-LISTENER_CONCENTRATION_THRESHOLD = 0.70  # Above this, listener "wins" over uniqueness score
-INFORMATIVENESS_MULTIPLIER = 2.0  # Multiplied by uniform baseline (1/K) for informativeness threshold
 
 
-def _make_sentence_id(sentence: str) -> str:
-    """Deterministic DOM ID for a sentence, used by click-to-scroll."""
-    return "sent_" + hashlib.md5(sentence.encode("utf-8")).hexdigest()[:12]
-
-
-def _click_to_scroll_js(sent_id: str, color: str = "#3b82f6") -> str:
-    """Return inline onclick JS for smooth-scroll + outline flash."""
-    return (
-        f"(function(){{var el=document.getElementById('{sent_id}');"
-        f"if(el){{el.scrollIntoView({{behavior:'smooth',block:'center'}});"
-        f"el.style.outline='3px solid {color}';"
-        f"setTimeout(function(){{el.style.outline='';}},2500);}}}})();"
-    )
-
-
-def _source_badges_html(sent: str, sentence_lists: list) -> str:
-    """Return R# badge HTML for all reviews containing the sentence."""
-    source = [r_idx + 1 for r_idx, sl in enumerate(sentence_lists) if sent in sl]
-    return " ".join(
-        f'<span style="background:#f3f4f6;color:#374151;padding:2px 6px;'
-        f'border-radius:4px;font-size:0.72em;font-weight:600;">R{n}</span>'
-        for n in source
-    )
-
-
-def _listener_dist_bars(sent: str, listener: dict, source_badges: str,
-                        badge_fg: str = "#1e40af") -> str:
-    """Render L_t(d|s) distribution bars or plain badge row."""
-    if listener and sent in listener:
-        dist = listener[sent]
-        bar_parts = []
-        for label, prob in sorted(dist.items()):
-            pct = int(round(prob * 100))
-            bar_w = max(2, int(prob * 80))
-            bar_parts.append(
-                f'<span style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;">'
-                f'<span style="font-size:0.7em;font-weight:600;color:{badge_fg};">{label}</span>'
-                f'<span style="display:inline-block;width:{bar_w}px;height:5px;'
-                f'background:#3b82f6;border-radius:3px;"></span>'
-                f'<span style="font-size:0.7em;color:#6b7280;">{pct}%</span>'
-                f'</span>'
-            )
-        return (
-            f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-bottom:3px;">'
-            f'{source_badges}'
-            f'<span style="color:#d1d5db;font-size:0.75em;">\u2192</span> '
-            + "".join(bar_parts) + "</div>"
-        )
-    return f'<div style="display:flex;gap:4px;margin-bottom:3px;">{source_badges}</div>'
-
-
-def _get_context(sentence: str, sentence_lists: list):
-    """Return (context_before, context_after) strings for the first review containing sentence."""
-    for sl in sentence_lists:
-        if sentence in sl:
-            idx = sl.index(sentence)
-            before = _html.escape(sl[idx - 1]) if idx > 0 else ""
-            after = _html.escape(sl[idx + 1]) if idx < len(sl) - 1 else ""
-            return before, after
-    return "", ""
-
-
-_TOGGLE_BTN_STYLE = (
-    'background:none;border:1px solid #d1d5db;border-radius:6px;padding:4px 12px;'
-    'font-size:0.78em;color:#6b7280;cursor:pointer;white-space:nowrap;'
-    'line-height:1;height:28px;box-sizing:border-box;vertical-align:middle;'
-    'display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;'
-)
-
-def _toggle_html(selector: str, text_when_all_open: str,
-                 text_when_not_all_open: str, initial_label: str) -> str:
-    """Generate a toggle button for expanding/collapsing details elements."""
-    return (
-        '<button onclick="'
-        f"let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
-        f"let details=tab.querySelectorAll('{selector}');"
-        "if(!details.length)return;"
-        "let allOpen=Array.from(details).every(d=>d.open);"
-        "details.forEach(d=>d.open=!allOpen);"
-        f"this.textContent=allOpen?'{text_when_all_open}':'{text_when_not_all_open}';"
-        f'" style="{_TOGGLE_BTN_STYLE}"'
-        f'>{initial_label}</button>'
-    )
-
-
-def _rebuttal_toggle_html() -> str:
-    """Generate an Expand/Collapse All Responses toggle button with inline JS."""
-    return _toggle_html("details:not(.review-collapse)",
-                        "Expand All Responses", "Collapse All Responses",
-                        "Expand All Responses")
-
-
-def _review_toggle_html() -> str:
-    """Generate a Collapse/Expand All Reviews toggle button with inline JS."""
-    return _toggle_html("details.review-collapse",
-                        "Expand All Reviews", "Collapse All Reviews",
-                        "Collapse All Reviews")
-
-
-def _jump_buttons_html(active_count: int, prefix: str = "int") -> str:
-    """Generate jump-to buttons [R1] [R2] ... that scroll to each review.
-    prefix: 'int' for interactive tab, 'pre' for pre-processed tab."""
-    buttons = []
-    for i in range(1, active_count + 1):
-        anchor_id = f"{prefix}-review-anchor-{i}"
-        js = (
-            f"(function(){{var el=document.getElementById('{anchor_id}');"
-            f"if(el)el.scrollIntoView({{behavior:'smooth',block:'start'}});"
-            f"}})()"
-        )
-        buttons.append(
-            f'<button onclick="{js}" '
-            f'style="{_TOGGLE_BTN_STYLE}font-weight:600;">'
-            f'R{i}</button>'
-        )
-    return "".join(buttons)
-
-
-
-def _should_break_before(sent: str) -> bool:
-    """Detect if a paragraph break should be inserted before this sentence."""
-    s = sent.strip()
-    # Numbered items: 1), 2., (1), 1:, etc.
-    if _re.match(r'^[\(\[]?\d+[\)\]\.:]', s):
-        return True
-    # Dash/bullet items
-    if len(s) > 2 and s[0] in ('-', '•', '*', '–', '—') and s[1] == ' ':
-        return True
-    # Markdown separators / headers
-    if s.startswith('##') or s.startswith('---'):
-        return True
-    # Common review section headers
-    if _re.match(
-        r'^\*{0,2}(Rating|Strengths?|Weaknesses?|Questions?|Limitations?|Summary|'
-        r'Soundness|Presentation|Contribution|Confidence|Experience|Review Assessment|'
-        r'Recommendation|Overall|Minor|Major|Typos?|Suggestions?|Comments?|'
-        r'Detailed\s+Comments?|Pros?|Cons?|Flag|Clarity|Significance|Originality)',
-        s, _re.IGNORECASE,
-    ):
-        return True
-    return False
-
-
-def _is_review_header(sent: str) -> bool:
-    """Detect if a sentence is a review metadata header (Rating:, Experience:, etc.)."""
-    return bool(_re.match(
-        r'^\*{0,2}(Rating|Confidence|Experience|Review Assessment|Recommendation|Flag)\b',
-        sent.strip(), _re.IGNORECASE,
-    ))
-
-
-# ---- Polarity / Topic color maps for HTML rendering ----
-_POLARITY_COLORS = {
-    2: "#d4fcd6", 0: "#fcd6d6",        # integer keys (pre-processed tab)
-    "➕": "#d4fcd6", "➖": "#fcd6d6",   # emoji keys (interactive tab)
-}  # positive=green, negative=red
-_TOPIC_HTML_COLORS = {
-    "Substance": "#b3e5fc",
-    "Clarity": "#c8e6c9",
-    "Soundness/Correctness": "#fff9c4",
-    "Originality": "#f8bbd0",
-    "Motivation/Impact": "#d1c4e9",
-    "Meaningful Comparison": "#ffe0b2",
-    "Replicability": "#b2dfdb",
-}
-
-
-def _wrap_review_card(label: str, inner_html: str, collapsible: bool = True) -> str:
-    """Wrap review content in a styled card with gray header. Single source of truth for review card styling."""
-    escaped = _html.escape(label) if label else ""
-    if collapsible:
-        return (
-            f'<details open class="review-collapse" style="border:1px solid #d1d5db;'
-            f'border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
-            f'<summary style="font-weight:600;font-size:0.9em;color:#374151;cursor:pointer;'
-            f'list-style:none;display:flex;align-items:center;gap:6px;'
-            f'background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;">'
-            f'<span style="transition:transform 0.2s;font-size:0.7em;">▶</span> '
-            f'{escaped}</summary>'
-            f'<div style="padding:12px 16px;">{inner_html}</div>'
-            f'</details>'
-        )
-    else:
-        if not label:
-            return inner_html
-        return (
-            f'<div style="border:1px solid #d1d5db;border-radius:8px;padding:0;margin-bottom:10px;overflow:hidden;">'
-            f'<div style="background:#f9fafb;padding:8px 14px;border-bottom:1px solid #e5e7eb;'
-            f'font-weight:600;font-size:0.85em;color:#374151;">{escaped}</div>'
-            f'<div style="padding:12px 16px;">{inner_html}</div>'
-            f'</div>'
-        )
-
-
-def render_review_html(
-    review_items: list,
-    mode: str = "plain",
-    label: str = "Review",
-    wrap: bool = False,
-) -> str:
-    """
-    Render a review as HTML with proper paragraph formatting.
-
-    Args:
-        review_items: list of (sentence, metadata_dict) tuples
-        mode: "plain", "polarity", or "topic"
-        label: header label
-        wrap: if False, return bare content (caller handles outer wrapper)
-    """
-    if not review_items:
-        return ""
-
-    parts = []
-    parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
-
-    for i, (sent, metadata) in enumerate(review_items):
-        # Paragraph break detection
-        if i > 0 and _should_break_before(sent):
-            parts.append('<br>')
-
-        # Header styling (Rating:, Experience:, etc.)
-        is_header = _is_review_header(sent)
-
-        bg = ""
-        label_text = ""
-        if mode == "polarity":
-            polarity = metadata.get("polarity")
-            if polarity in _POLARITY_COLORS:
-                bg = f"background:{_POLARITY_COLORS[polarity]};"
-        elif mode == "topic":
-            topic = metadata.get("topic")
-            if topic and topic != "NONE" and topic in _TOPIC_HTML_COLORS:
-                bg = f"background:{_TOPIC_HTML_COLORS[topic]};"
-                label_text = topic
-
-        style = f"padding:1px 3px;border-radius:3px;{bg}"
-        if is_header:
-            style += "font-weight:600;color:#92400e;"
-
-        sent_id = _make_sentence_id(sent)
-        escaped = _html.escape(sent)
-
-        if label_text:
-            # Show topic label as a small tag
-            parts.append(
-                f'<span id="{sent_id}" style="{style}" title="{_html.escape(label_text)}">'
-                f'{escaped} </span>'
-            )
-        else:
-            parts.append(f'<span id="{sent_id}" style="{style}">{escaped} </span>')
-
-    parts.append('</div>')
-    content = "".join(parts)
-    if wrap:
-        return _wrap_review_card(label, content, collapsible=True)
-    elif label:
-        return _wrap_review_card(label, content, collapsible=False)
-    return content
-
-
-def _normalize_polarity(val) -> Optional[str]:
-    """Normalize polarity from any format to 'positive'/'negative'/None."""
-    if val == "➕" or val == 2 or val == "positive":
-        return "positive"
-    if val == "➖" or val == 0 or val == "negative":
-        return "negative"
-    return None  # neutral or unknown
-
-
-def format_common_themes(
-    sentence_lists: list,
-    polarity_map: dict,
-    topic_map: dict,
-    speaker: dict = None,
-    uniqueness: dict = None,
-    listener: dict = None,
-) -> str:
-    """
-    Common Themes Across Reviews — groups sentences by topic, then shows
-    polarity breakdown within each topic.
-
-    A topic is "common" if sentences from ≥2 different reviewers share it.
-    Each topic card shows a polarity percentage bar and representative
-    sentences per reviewer under each polarity sub-group.
-
-    Falls back to RSA-based generic sentences if no common themes are found.
-    """
-    num_reviews = len(sentence_lists)
-    if num_reviews < 2:
-        return ""
-
-    # --- Step 1: Build per-sentence (topic, polarity) index ---
-    # topic_data[topic][polarity][r_idx] = [sentences]
-    topic_data = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-
-    for r_idx, sl in enumerate(sentence_lists):
-        for sent in sl:
-            if _should_break_before(sent) or _is_review_header(sent):
-                continue
-            if len(sent.split()) < 5:
-                continue
-            topic = topic_map.get(sent)
-            polarity = _normalize_polarity(polarity_map.get(sent))
-            if topic is None and polarity is None:
-                continue
-            topic_key = topic if topic else "Other"
-            polarity_key = polarity if polarity else "neutral"
-            topic_data[topic_key][polarity_key][r_idx].append(sent)
-
-    # --- Step 2: Filter to topics with ≥2 unique reviewers ---
-    common_topics = []
-    for topic, pol_dict in topic_data.items():
-        all_reviewers = set()
-        total_sents = 0
-        for pol, rev_dict in pol_dict.items():
-            all_reviewers.update(rev_dict.keys())
-            total_sents += sum(len(s) for s in rev_dict.values())
-        if len(all_reviewers) < 2:
-            continue
-        common_topics.append((topic, len(all_reviewers), total_sents, pol_dict))
-
-    # Prefer topics that have non-neutral polarity entries
-    has_sentiment = [t for t in common_topics
-                     if any(p in t[3] for p in ("positive", "negative"))]
-    if len(has_sentiment) >= 1:
-        common_topics = has_sentiment
-
-    # Rank by reviewer count (desc), then sentence count (desc); push "Other" to bottom
-    common_topics.sort(key=lambda t: (0 if t[0] == "Other" else 1, t[1], t[2]), reverse=True)
-
-    # --- Fallback: Generic Sentences ---
-    if not common_topics:
-        if not uniqueness:
-            return ""
-        scores_series = pd.Series(uniqueness)
-        n_seed = min(5, len(scores_series))
-        fallback = scores_series.nsmallest(n_seed).index.tolist()
-        if not fallback:
-            return ""
-
-        parts = [
-            '<details open style="margin-bottom:10px;border:1px solid #d1d5db;border-radius:8px;'
-            'padding:0;overflow:hidden;">',
-            '<summary style="cursor:pointer;font-weight:700;font-size:0.92em;color:#1f2937;'
-            'padding:10px 14px;list-style:none;background:#f9fafb;border-bottom:1px solid #e5e7eb;'
-            'user-select:none;display:flex;align-items:center;gap:6px;">'
-            '<span class="collapse-arrow" style="display:inline-block;transition:transform 0.2s;'
-            'font-size:0.75em;">&#9660;</span>'
-            'Generic Sentences</summary>',
-            '<div style="padding:8px 10px;">',
-            '<div style="background:#fefce8;border:1px solid #fde68a;border-radius:6px;'
-            'padding:8px 12px;margin-bottom:8px;font-size:0.82em;color:#92400e;">'
-            'No shared themes detected across reviewers. Showing sentences with lowest '
-            'RSA uniqueness score (most generic across reviews).</div>',
-        ]
-        for sent in fallback:
-            sent_id = _make_sentence_id(sent)
-            badges = _source_badges_html(sent, sentence_lists)
-            dist_html = _listener_dist_bars(sent, listener, badges)
-
-            onclick = _click_to_scroll_js(sent_id)
-            parts.append(
-                f'<div style="border:1px solid #e5e7eb;border-left:3px solid #d1d5db;'
-                f'border-radius:6px;padding:6px 10px;margin-bottom:4px;cursor:pointer;" '
-                f'onclick="{_html.escape(onclick)}">'
-                f'{dist_html}'
-                f'<span style="color:#111827;">{_html.escape(sent)}</span>'
-                f'</div>'
-            )
-        parts.append('</div></details>')
-        return "".join(parts)
-
-    # --- Step 3: Render topic cards with polarity breakdown ---
-    _pol_colors = {"negative": "#ef4444", "positive": "#22c55e", "neutral": "#9ca3af"}
-    _pol_labels = {"negative": "Negative", "positive": "Positive", "neutral": "Neutral"}
-    # Render order: negative first (concerns), then positive, then neutral
-    _pol_order = ["negative", "positive", "neutral"]
-
-    def _pick_best(sents, r_idx):
-        """Pick best sentence by speaker score for this reviewer."""
-        r_label = f"R{r_idx + 1}"
-        if speaker and r_label in speaker:
-            sp = speaker[r_label]
-            scored = [(s, sp.get(s, 0.0)) for s in sents]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            return scored[0][0]
-        return sents[0]
-
-    def _sent_row(sent, r_idx):
-        """Render a single sentence row with R# badge and click-to-scroll."""
-        r_label = f"R{r_idx + 1}"
-        sent_id = _make_sentence_id(sent)
-        onclick = _click_to_scroll_js(sent_id)
-        return (
-            f'<div style="display:flex;align-items:baseline;gap:6px;padding:2px 0;'
-            f'padding-left:8px;cursor:pointer;" '
-            f'onclick="{_html.escape(onclick)}">'
-            f'<span style="background:#f3f4f6;color:#374151;padding:1px 5px;'
-            f'border-radius:3px;font-size:0.7em;font-weight:600;flex-shrink:0;">{r_label}</span>'
-            f'<span style="color:#374151;font-size:0.85em;line-height:1.4;">{_html.escape(sent)}</span>'
-            f'</div>'
-        )
-
-    cards = []
-    for topic, n_reviewers, total_sents, pol_dict in common_topics:
-        border_color = _TOPIC_HTML_COLORS.get(topic, "#d1d5db")
-        reviewer_text = (
-            f"All {num_reviews} reviewers" if n_reviewers == num_reviews
-            else f"{n_reviewers} of {num_reviews} reviewers"
-        )
-
-        # --- Polarity percentage bar ---
-        pol_counts = {}
-        for pol in _pol_order:
-            if pol in pol_dict:
-                pol_counts[pol] = sum(len(s) for s in pol_dict[pol].values())
-        total = sum(pol_counts.values()) or 1
-
-        # Inline polarity bar + labels (compact, on one line)
-        _pol_colors_soft = {"negative": "#f87171", "positive": "#4ade80", "neutral": "#d1d5db"}
-        bar_segments = []
-        bar_labels = []
-        for pol in _pol_order:
-            cnt = pol_counts.get(pol, 0)
-            if cnt == 0:
-                continue
-            pct = round(cnt / total * 100)
-            color = _pol_colors_soft[pol]
-            bar_segments.append(
-                f'<span style="display:inline-block;height:6px;width:{max(pct, 4)}%;'
-                f'background:{color};opacity:0.75;"></span>'
-            )
-            bar_labels.append(
-                f'<span style="font-size:0.7em;color:#6b7280;">'
-                f'{pct}% {_pol_labels[pol]}</span>'
-            )
-
-        # Skip polarity bar for "Other" — unclassified sentences aren't necessarily related
-        if topic == "Other":
-            polarity_bar = ""
-        else:
-            polarity_bar = (
-                f'<div style="display:flex;align-items:center;gap:6px;margin-left:8px;">'
-                f'<div style="display:flex;width:80px;height:6px;border-radius:3px;overflow:hidden;'
-                f'background:#f3f4f6;flex-shrink:0;">'
-                + "".join(bar_segments)
-                + '</div>'
-                + " ".join(bar_labels)
-                + '</div>'
-            )
-
-        # --- Header (polarity bar inline after reviewer count) ---
-        header = (
-            f'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
-            f'<span style="font-weight:600;font-size:0.88em;color:#1f2937;">{_html.escape(topic)}</span>'
-            f'<span style="color:#9ca3af;font-size:0.75em;">·</span>'
-            f'<span style="font-size:0.75em;color:#6b7280;">{reviewer_text}</span>'
-            f'{polarity_bar}'
-            f'</div>'
-        )
-
-        # --- Polarity sub-groups ---
-        sub_groups_html = []
-        for pol in _pol_order:
-            if pol not in pol_dict:
-                continue
-            rev_dict = pol_dict[pol]
-            cnt = pol_counts.get(pol, 0)
-            color = _pol_colors[pol]
-
-            sub_header = (
-                f'<div style="font-size:0.78em;font-weight:600;color:{color};'
-                f'margin:4px 0 2px 0;">'
-                f'{_pol_labels[pol]} ({cnt} sentence{"s" if cnt != 1 else ""})</div>'
-            )
-
-            rows = []
-            for r_idx in sorted(rev_dict.keys()):
-                best = _pick_best(rev_dict[r_idx], r_idx)
-                rows.append(_sent_row(best, r_idx))
-
-            sub_groups_html.append(sub_header + "".join(rows))
-
-        cards.append(
-            f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-            f'border-radius:6px;padding:8px 12px;margin-bottom:5px;">'
-            f'{header}{"".join(sub_groups_html)}'
-            f'</div>'
-        )
-
-    inner = "".join(cards)
-    return (
-        f'<details open style="margin-bottom:10px;border:1px solid #d1d5db;border-radius:8px;'
-        f'padding:0;overflow:hidden;">'
-        f'<summary style="cursor:pointer;font-weight:700;font-size:0.92em;color:#1f2937;'
-        f'padding:10px 14px;list-style:none;background:#f9fafb;border-bottom:1px solid #e5e7eb;'
-        f'user-select:none;display:flex;align-items:center;gap:6px;">'
-        f'<span class="collapse-arrow" style="display:inline-block;transition:transform 0.2s;'
-        f'font-size:0.75em;">&#9654;</span>'
-        f'Common Themes Across Reviews</summary>'
-        f'<div style="padding:8px 10px;">{inner}</div>'
-        f'</details>'
-    )
-
-
-def format_divergent_cards(
-    uniqueness: dict,
-    sentence_lists: list,
-    listener: dict,
-    speaker: dict,
-) -> Dict[int, str]:
-    """
-    Most Divergent Opinions — returns per-review HTML dict {review_index: html}.
-
-    For each review, finds the sentences where argmax(L_t(d|s)) points to that
-    review (i.e., the listener assigns it most strongly to that reviewer) AND
-    the uniqueness score is above the median. Ranks within each reviewer's set
-    by their Speaker score S_t(s|d) (how characteristic of that reviewer).
-    Shows the top 2 per reviewer.
-    """
-    if not uniqueness or not listener or not speaker:
-        return {}
-
-    num_reviews = len(speaker)
-    if num_reviews == 0:
-        return {}
-
-    median_u = float(np.median(list(uniqueness.values())))
-    review_labels = [f"R{i+1}" for i in range(num_reviews)]
-
-    # Minimum speaker score to suppress generic filler.
-    k = max(sum(len(v) for v in speaker.values()) // max(len(speaker), 1), 1)
-    min_speaker_score = INFORMATIVENESS_MULTIPLIER / k
-
-    # Group sentences by their argmax review
-    grouped: dict = {label: [] for label in review_labels}
-    for sent, u_score in uniqueness.items():
-        if u_score <= median_u:
-            continue
-        if sent not in listener:
-            continue
-        dist = listener[sent]
-        if not dist:
-            continue
-        argmax_label = max(dist, key=lambda k: dist[k])
-        if argmax_label not in grouped:
-            continue
-        s_score = speaker.get(argmax_label, {}).get(sent, 0.0)
-        if s_score < min_speaker_score:
-            continue
-        grouped[argmax_label].append((sent, u_score, s_score))
-
-    # Sort each group by speaker score descending and take top 2
-    for label in review_labels:
-        grouped[label].sort(key=lambda x: x[2], reverse=True)
-        grouped[label] = grouped[label][:2]
-
-    border_color = "#fca5a5"
-    result: Dict[int, str] = {}
-
-    for i, label in enumerate(review_labels):
-        items = grouped[label]
-        if not items:
-            continue
-
-        ctx_style = "color:#b0b0b0;font-size:0.85em;font-style:italic;"
-        html_parts = [
-            '<div style="margin-top:10px;margin-bottom:6px;font-weight:600;font-size:0.82em;color:#7f1d1d;">'
-            f'Unique Points in This Review</div>'
-        ]
-        for sent, u_score, s_score in items:
-            sent_id = _make_sentence_id(sent)
-            context_before, context_after = _get_context(sent, sentence_lists)
-
-            dom_pct = 0
-            if sent in listener:
-                dom_pct = int(round(max(listener[sent].values(), default=0.0) * 100))
-            uniqueness_badge = (
-                f'<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;'
-                f'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;margin-bottom:3px;">'
-                f'{dom_pct}% listener share</span>'
-            )
-
-            onclick = _click_to_scroll_js(sent_id, "#ef4444")
-
-            before_span = f'<span style="{ctx_style}">...{_html.escape(context_before)} </span>' if context_before else ""
-            after_span = f'<span style="{ctx_style}"> {_html.escape(context_after)}...</span>' if context_after else ""
-
-            html_parts.append(
-                f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
-                f'border-radius:6px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" '
-                f'onclick="{_html.escape(onclick)}">'
-                f'{uniqueness_badge}'
-                f'<div style="color:#111827;line-height:1.5;">'
-                f'{before_span}'
-                f'<span style="font-weight:500;">{_html.escape(sent)}</span>'
-                f'{after_span}'
-                f'</div>'
-                f'</div>'
-            )
-
-        result[i] = "".join(html_parts)
-
-    return result
-
-
-def render_agreement_html(
-    sentences: List[str],
-    uniqueness: Dict[str, float],
-    listener: Dict[str, Dict[str, float]],
-    speaker: Dict[str, Dict[str, float]],
-    num_reviews: int,
-    label: str = "Agreement",
-    wrap: bool = False,
-) -> str:
-    """
-    Custom HTML renderer for Agreement mode (replaces gr.HighlightedText).
-
-    Each sentence gets:
-    - Continuous opacity from score magnitude (strongest opinions most vivid)
-    - CSS hover tooltip showing L_t(d|s): "R1 (40%) · R2 (45%)"
-    - Informativeness dimming for generic common filler
-    - Sentence ID for click-to-scroll from summary cards
-    """
-    if not sentences:
-        return ""
-
-    # Color scale legend bar
-    legend_html = (
-        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;'
-        'font-size:0.75em;color:#6b7280;">'
-        '<span style="background:linear-gradient(to right,rgba(59,130,246,0.7),rgba(209,213,219,0.3),rgba(239,68,68,0.7));'
-        'width:120px;height:8px;border-radius:4px;display:inline-block;"></span>'
-        '<span>← Common &nbsp;|&nbsp; Unique →</span>'
-        '</div>'
-    )
-
-    parts = []
-    parts.append(legend_html)
-    parts.append('<div style="line-height:1.8;font-size:0.95em;margin-top:6px;">')
-
-    # Compute informativeness threshold: 2 / K (twice uniform baseline)
-    k = max(len(uniqueness), 1)
-    info_threshold = INFORMATIVENESS_MULTIPLIER / k
-
-    for idx, sent in enumerate(sentences):
-        # Paragraph break detection
-        if idx > 0 and _should_break_before(sent):
-            parts.append('<br>')
-
-        sent_id = _make_sentence_id(sent)
-        score = uniqueness.get(sent)
-
-        # Header styling (Rating:, Experience:, etc.)
-        header_style = "font-weight:600;color:#92400e;" if _is_review_header(sent) else ""
-
-        if score is None or abs(score) < HIGHLIGHT_THRESHOLD:
-            # No highlight
-            parts.append(f'<span id="{sent_id}" style="{header_style}">{_html.escape(sent)} </span>')
-            continue
-
-        # --- Color and opacity ---
-        if score < 0:
-            # Common: blue — opacity from listener ENTROPY so more balanced = more vivid.
-            r, g, b = 59, 130, 246
-            if listener and sent in listener:
-                dist = listener[sent]
-                max_prob = max(dist.values(), default=0.0)
-                max_entropy = math.log(max(num_reviews, 2))
-                entropy = sum(-p * math.log(p) for p in dist.values() if p > 0)
-
-                # If listener is highly concentrated on one reviewer (>70%), the RSA
-                # uniqueness score and listener disagree — trust the listener and
-                # suppress blue. This prevents e.g. R2 91% sentences from appearing blue.
-                if max_prob > LISTENER_CONCENTRATION_THRESHOLD:
-                    opacity = 0.0
-                else:
-                    opacity = (entropy / max_entropy) ** AGREEMENT_AMP_COMMON if max_entropy > 0 else 0.0
-            else:
-                opacity = abs(score) ** AGREEMENT_AMP_COMMON
-
-            # Informativeness dimming for generic filler
-            if speaker:
-                info = compute_informativeness(sent, speaker, num_reviews)
-                if info < info_threshold:
-                    opacity *= 0.3
-        else:
-            # Unique: red — opacity from score magnitude (as before)
-            r, g, b = 239, 68, 68
-            opacity = abs(score) ** AGREEMENT_AMP_UNIQUE
-
-        bg_color = f"rgba({r},{g},{b},{opacity:.3f})"
-
-        # --- Tooltip content from L_t(d|s) ---
-        tooltip_text = ""
-        if listener and sent in listener:
-            dist = listener[sent]
-            parts_tooltip = " · ".join(
-                f"{lbl} {int(round(p * 100))}%"
-                for lbl, p in sorted(dist.items())
-            )
-            tooltip_text = f"{parts_tooltip}"
-        else:
-            tooltip_text = f"Score: {score:+.2f}"
-
-        # Inline JS positions the tooltip near the cursor using fixed positioning
-        hover_js = (
-            "var t=this.querySelector('.rsa-tooltip');var r=this.getBoundingClientRect();"
-            "t.style.display='block';"
-            "t.style.left=Math.min(r.left,window.innerWidth-290)+'px';"
-            "t.style.top=(r.top-t.offsetHeight-6)+'px';"
-        )
-        leave_js = "this.querySelector('.rsa-tooltip').style.display='none';"
-        parts.append(
-            f'<span id="{sent_id}" class="rsa-sentence" style="background:{bg_color};" '
-            f'onmouseenter="{hover_js}" onmouseleave="{leave_js}">'
-            f'{_html.escape(sent)} '
-            f'<span class="rsa-tooltip">{_html.escape(tooltip_text)}</span>'
-            f'</span>'
-        )
-
-    parts.append("</div>")  # close sentence container
-    content = "".join(parts)
-    if wrap:
-        return _wrap_review_card(label, content, collapsible=True)
-    elif label:
-        return _wrap_review_card(label, content, collapsible=False)
-    return content
-
-
-def build_review_card(
-    label: str,
-    *,
-    review_items: list = None,
-    mode: str = "plain",
-    sentences: List[str] = None,
-    uniqueness: Dict = None,
-    listener: dict = None,
-    speaker: dict = None,
-    num_reviews: int = 0,
-    divergent_html: str = "",
-    rebuttal_html: str = "",
-    collapsible: bool = True,
-) -> str:
-    """Unified review card builder — single entry point for both tabs.
-
-    For plain/polarity/topic: pass review_items + mode.
-    For agreement: pass sentences + RSA dicts (uniqueness, listener, speaker, num_reviews).
-    Optional divergent_html and rebuttal_html are appended inside the card.
-    """
-    if sentences is not None:
-        inner = render_agreement_html(
-            sentences, uniqueness or {}, listener, speaker,
-            num_reviews=num_reviews, label="",
-        )
-    elif review_items is not None:
-        inner = render_review_html(review_items, mode=mode, label="")
-    else:
-        inner = ""
-    return _wrap_review_card(label, f"{inner}{divergent_html}{rebuttal_html}", collapsible=collapsible)
 
 
 # Auto-detect the preprocessed dataset CSV
@@ -879,82 +119,12 @@ def get_preprocessed_metadata(year):
     return {}
 
 
-# -----------------------------------
-# Interactive Tab Configuration
-# -----------------------------------
-
-# Define the manual color map for topics
-topic_color_map = {
-    "Substance": "#cce0ff",             # lighter blue
-    "Clarity": "#e6ee9c",               # lighter yellow-green
-    "Soundness/Correctness": "#ffcccc", # lighter red
-    "Originality": "#d1c4e9",           # lighter purple
-    "Motivation/Impact": "#b2ebf2",     # lighter teal
-    "Meaningful Comparison": "#fff9c4", # lighter yellow
-    "Replicability": "#c8e6c9",         # lighter green
-}
-
-
-EXAMPLES = [
-    "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. I believe the authors missed Jane and al 2021. In addition, I think, there is a mistake in the math.",
-    "The paper gives really interesting insights on the topic of transfer learning. It is well presented and the experiment are extensive. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
-    "The paper gives really interesting insights on the topic of transfer learning. It is not well presented and lack experiments. Some parts remain really unclear and I would like to see a more detailed explanation of the proposed method.",
-]
-
-FETCHING_HTML = """
-<div style="display:flex;align-items:center;gap:12px;padding:16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:8px 0;">
-  <div style="width:24px;height:24px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-  <div>
-    <div style="font-weight:600;color:#312e81;">Fetching reviews from OpenReview...</div>
-  </div>
-</div>
-<style>@keyframes procspin{to{transform:rotate(360deg);}}</style>
-"""
-
-POLARITY_PROGRESS_HTML = """
-<div style="padding:10px 16px;background:#f0fff4;border-radius:8px;border:1px solid #bbf7d0;margin:0;">
-  <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:18px;height:18px;border:3px solid #dcfce7;border-top:3px solid #16a34a;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#14532d;font-size:0.9em;white-space:nowrap;">Computing polarity &amp; topic... </span>
-    <div style="flex:1;background:#dcfce7;border-radius:4px;height:6px;overflow:hidden;">
-      <div style="background:linear-gradient(90deg,#4ade80,#16a34a);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
-    </div>
-  </div>
-</div>
-"""
-
-AGREEMENT_PROGRESS_HTML = """
-<div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
-  <div style="display:flex;align-items:center;gap:10px;">
-    <div style="width:18px;height:18px;border:3px solid #e0e7ff;border-top:3px solid #4f46e5;border-radius:50%;animation:procspin 1s linear infinite;flex-shrink:0;"></div>
-    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement in background...</span>
-    <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
-      <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;border-radius:4px;animation:agrslide 2s ease-in-out infinite;"></div>
-    </div>
-  </div>
-</div>
-"""
-
-
-def _status_html(msg, kind="success"):
-    """Generate styled HTML for status messages."""
-    styles = {
-        "success": ("✅", "#f0fdf4", "#16a34a", "#166534", "#bbf7d0"),
-        "error":   ("❌", "#fef2f2", "#dc2626", "#991b1b", "#fecaca"),
-        "warning": ("⚠️", "#fffbeb", "#d97706", "#92400e", "#fde68a"),
-    }
-    icon, bg, _, text_color, border_color = styles.get(kind, styles["success"])
-    return f'''<div style="display:flex;align-items:center;gap:10px;padding:12px 16px;background:{bg};border-radius:8px;border:1px solid {border_color};margin:8px 0;">
-  <span style="font-size:1.2em;">{icon}</span>
-  <span style="color:{text_color};font-weight:500;">{msg}</span>
-</div>'''
-
 # ===== INTERACTIVE TAB: GLOBAL PROCESSOR INITIALIZATION =====
 # Initialize once at module load to avoid reloading models
 from interface.interactive_processor import InteractiveReviewProcessor
 from dependencies.sentence_filter import (
-    is_noise_sentence, filter_and_clean_sentences, strip_header_prefix,
-    HIGHLIGHT_THRESHOLD, compute_informativeness,
+    is_noise_sentence, filter_and_clean_sentences,
+    HIGHLIGHT_THRESHOLD,
 )
 _interactive_processor = None
 
@@ -976,8 +146,6 @@ def _gpu_predict_polarity_topic(sentences: List[str]) -> Tuple[Dict, Dict]:
     topic_map = processor.predict_topic(sentences)
     return polarity_map, topic_map
 
-
-MAX_INTERACTIVE_REVIEWS = 6
 
 
 def fetch_openreview_reviews(link: str):
@@ -1002,7 +170,7 @@ def fetch_openreview_reviews(link: str):
         reviews = reviews[:MAX_INTERACTIVE_REVIEWS]
 
         num_reviews = len([r for r in reviews if r.strip()])
-        status = _status_html(f"Fetched {num_reviews} reviews for: {title}", "success")
+        status = render_status(f"Fetched {num_reviews} reviews for: {title}", "success")
         return (*reviews, title, rebuttal, status)
 
     except gr.Error:
@@ -1021,151 +189,6 @@ def fetch_openreview_reviews(link: str):
             suggestion = ""
 
         raise gr.Error(f"{error_msg}{suggestion}")
-
-
-def _parse_rebuttal_json(rebuttal: str) -> Optional[list]:
-    """Parse rebuttal JSON string, returning list of items or None."""
-    if not rebuttal or not rebuttal.strip():
-        return None
-    try:
-        items = json.loads(rebuttal)
-        return items if items else None
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return None
-
-
-_REBUTTAL_PER_REVIEW_STYLE = (
-    "margin-top:8px;margin-bottom:12px;border-radius:6px;overflow:hidden;"
-    "border:1px solid #fde68a;background:#fffef5;"
-)
-_REBUTTAL_GENERAL_STYLE = (
-    "margin-top:16px;border-radius:8px;overflow:hidden;"
-    "border:1px solid #fde68a;"
-)
-
-
-def format_rebuttal_plain(text: str) -> str:
-    """Format a plain text rebuttal as collapsible HTML.
-    For pre-processed data where each review has its own rebuttal string."""
-    if not text or not text.strip():
-        return ""
-    return (
-        f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
-        '<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-        'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-        '<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-        '<div style="padding:10px 14px;">'
-        f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
-        '</div></details>'
-    )
-
-
-def format_rebuttal_for_review(rebuttal: str, review_num: int) -> str:
-    """Format rebuttals that reply to a specific review number."""
-    if not rebuttal or not rebuttal.strip():
-        return ""
-
-    items = _parse_rebuttal_json(rebuttal)
-    if items is not None:
-        # Filter to only rebuttals for this review
-        relevant = [item for item in items if item.get("reply_to") == review_num]
-        if not relevant:
-            return ""
-
-        response_parts = []
-        for i, item in enumerate(relevant):
-            text = item.get("text", "").strip()
-            if not text:
-                continue
-
-            response_parts.append(
-                f'<div style="padding:10px 14px;">'
-                f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
-                f'</div>'
-            )
-
-        if not response_parts:
-            return ""
-
-        return (
-            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
-            f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-            f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-            f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-            + "".join(response_parts)
-            + "</details>"
-        )
-
-    # Plain text - show under first review only
-    if review_num == 1:
-        text = rebuttal.strip()
-        return (
-            f'<details style="{_REBUTTAL_PER_REVIEW_STYLE}">'
-            f'<summary style="padding:10px 14px;cursor:pointer;font-size:0.75em;color:#92400e;'
-            f'font-weight:600;list-style:none;display:flex;align-items:center;gap:6px;">'
-            f'<span style="transition:transform 0.2s;">▶</span> Author Response</summary>'
-            f'<div style="padding:10px 14px;">'
-            f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.85em;line-height:1.5;">{text}</div>'
-            f'</div></details>'
-        )
-    return ""
-
-
-def format_general_rebuttals(rebuttal: str) -> str:
-    """Format general rebuttals (those not replying to a specific review)."""
-    if not rebuttal or not rebuttal.strip():
-        return ""
-
-    HEADER_STYLE = "background:#fffbeb;padding:10px 16px;border-bottom:1px solid #fde68a;display:flex;align-items:center;gap:8px;"
-    TITLE_STYLE = "font-weight:600;color:#92400e;"
-
-    items = _parse_rebuttal_json(rebuttal)
-    if items is not None:
-        # Filter to only general rebuttals (no specific reply_to)
-        general = [item for item in items if item.get("reply_to") is None]
-        if not general:
-            return ""
-
-        response_parts = []
-        for i, item in enumerate(general):
-            text = item.get("text", "").strip()
-            if not text:
-                continue
-
-            bg = "white" if i % 2 == 0 else "#fafafa"
-            sep = "border-top:1px solid #fde68a;" if i > 0 else ""
-            response_parts.append(
-                f'<div style="padding:14px 16px;background:{bg};{sep}">'
-                f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.9em;line-height:1.6;">{text}</div>'
-                f'</div>'
-            )
-
-        if not response_parts:
-            return ""
-
-        count_label = f"{len(response_parts)} general response{'s' if len(response_parts) > 1 else ''}"
-        return (
-            f'<details style="{_REBUTTAL_GENERAL_STYLE}">'
-            f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
-            f'<span style="font-size:1.1em;">💬</span>'
-            f'<span style="{TITLE_STYLE}">General Author Response</span>'
-            f'<span style="margin-left:auto;font-size:0.8em;color:#78716c;">{count_label}</span>'
-            f'</summary>'
-            + "".join(response_parts) +
-            '</details>'
-        )
-
-    # Plain text - treat as general response
-    text = rebuttal.strip()
-    return (
-        f'<details style="{_REBUTTAL_GENERAL_STYLE}">'
-        f'<summary style="{HEADER_STYLE}cursor:pointer;list-style:none;">'
-        f'<span style="font-size:1.1em;">💬</span>'
-        f'<span style="{TITLE_STYLE}">General Author Response</span></summary>'
-        f'<div style="padding:14px 16px;background:white;">'
-        f'<div style="white-space:pre-wrap;color:#1f2937;font-size:0.9em;line-height:1.6;">{text}</div>'
-        f'</div></details>'
-    )
 
 
 def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: str, text5: str, text6: str, focus: str, rebuttal_str: str = "", thread_state=None, progress=gr.Progress()) -> Tuple:
@@ -1289,37 +312,6 @@ def process_interactive_reviews_fast(text1: str, text2: str, text3: str, text4: 
     )
 
 
-def _fmt_time(sec: float) -> str:
-    """Format seconds as MM:SS or HH:MM:SS like tqdm."""
-    if sec is None:
-        return "?"
-    sec = int(sec)
-    if sec < 3600:
-        return f"{sec // 60:02d}:{sec % 60:02d}"
-    return f"{sec // 3600}:{(sec % 3600) // 60:02d}:{sec % 60:02d}"
-
-
-def _agreement_progress_html(pct: int, done: int, total: int,
-                              eta_sec: float = None, elapsed: float = None,
-                              rate: float = None) -> str:
-    """Progress bar HTML for the agreement computation, tqdm-style [elapsed<eta, rate s/it]."""
-    if done > 0 and elapsed is not None:
-        info = f"{done}/{total} [{_fmt_time(elapsed)}<{_fmt_time(eta_sec)}, {rate:.1f}s/it]"
-    else:
-        info = f"{done}/{total}"
-    return f"""
-<div style="padding:10px 16px;background:#f0f4ff;border-radius:8px;border:1px solid #c7d2fe;margin:0;">
-  <div style="display:flex;align-items:center;gap:10px;">
-    <span style="font-weight:600;color:#312e81;font-size:0.9em;white-space:nowrap;">Computing agreement: {pct}%</span>
-    <div style="flex:1;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden;">
-      <div style="background:linear-gradient(90deg,#818cf8,#4f46e5);height:100%;width:{pct}%;border-radius:4px;transition:width 0.4s ease;"></div>
-    </div>
-    <span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">{info}</span>
-  </div>
-</div>
-"""
-
-
 def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
     """
     Generator: streams real progress to agreement_progress_html while RSA runs in a thread,
@@ -1370,7 +362,7 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
             elapsed = time.time() - t0
             rate = elapsed / done  # seconds per batch
             eta_sec = rate * (total - done)
-        yield (*_no_op_8, gr.update(visible=True, value=_agreement_progress_html(pct, done, total, eta_sec, elapsed, rate)), gr.update())
+        yield (*_no_op_8, gr.update(visible=True, value=render_agreement_progress(pct, done, total, eta_sec, elapsed, rate)), gr.update())
         time.sleep(0.4)
 
     t.join()
@@ -1434,115 +426,6 @@ def compute_rsa_in_background(rsa_state: Dict, current_focus: str):
 
 
 
-
-CUSTOM_CSS = """
-.review-section-header h3 {
-    color: #1e40af;
-    border-left: 4px solid #3b82f6;
-    padding-left: 10px;
-    margin-top: 16px;
-}
-.rebuttal-section-header h3 {
-    color: #92400e;
-    border-left: 4px solid #f59e0b;
-    padding-left: 10px;
-    margin-top: 16px;
-}
-
-/* RSA sentence tooltip styles — uses JS positioning via onmouseenter */
-.rsa-sentence {
-    position: relative;
-    cursor: help;
-    padding: 1px 3px;
-    border-radius: 2px;
-    display: inline;
-}
-.rsa-tooltip {
-    display: none;
-    position: fixed;
-    background: #1f2937;
-    color: white;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 0.78em;
-    z-index: 10000;
-    pointer-events: none;
-    max-width: 280px;
-    width: max-content;
-    white-space: normal;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
-}
-
-/* Collapsible author response toggle */
-details summary::-webkit-details-marker { display: none; }
-details[open] summary span:first-child { display: inline-block; transform: rotate(90deg); }
-
-/* Smooth scrolling everywhere */
-html, body, .gradio-container, main, .contain { scroll-behavior: smooth !important; }
-
-/* Back to top button */
-#back-to-top-btn {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 9999;
-    padding: 8px 14px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    background: white;
-    color: #374151;
-    font-size: 0.82em;
-    font-weight: 500;
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
-    display: none;
-    transition: opacity 0.2s;
-}
-#back-to-top-btn:hover { background: #f3f4f6; }
-
-/* Paper title heading style for interactive tab */
-.paper-title-heading textarea {
-    font-size: 1.17em !important;
-    font-weight: 700 !important;
-    color: #1f2937 !important;
-    border: none !important;
-    background: transparent !important;
-    padding: 0 !important;
-    line-height: 1.3 !important;
-    min-height: 0 !important;
-}
-.paper-title-heading { padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
-
-/* Zero-height review anchor elements for jump navigation */
-.review-anchor { height: 0 !important; overflow: hidden !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; border: none !important; }
-.review-anchor > * { height: 0 !important; margin: 0 !important; padding: 0 !important; }
-
-/* Tighter vertical spacing in results section */
-.results-compact { gap: 4px !important; }
-
-
-/* Progress bar group — zero internal spacing, collapses when both children hidden */
-.progress-group, .progress-group > * {
-    gap: 0 !important; padding: 0 !important; margin: 0 !important;
-    border: none !important; box-shadow: none !important;
-    border-radius: 0 !important; min-height: 0 !important;
-}
-/* Remove Gradio wrapper spacing around individual progress bars */
-.progress-compact { margin: 0 !important; padding: 0 !important; width: 100% !important; min-height: 0 !important; }
-/* Suppress Gradio's loading/progress indicator on progress bar components */
-.progress-compact .progress-bar, .progress-compact .eta-bar,
-.progress-compact > .wrap, .progress-compact .generating { display: none !important; }
-
-/* Suppress Gradio's orange "pending update" pulsing border */
-.generating { animation: none !important; border-color: #e5e7eb !important; box-shadow: none !important; }
-
-/* Remove the border/separator line around the display mode radio row */
-.no-border-row { border: none !important; box-shadow: none !important; padding: 0 !important; margin-bottom: 0 !important; }
-
-/* Progress bar animations — global so they survive HTML replacement in generators */
-@keyframes procspin { to { transform: rotate(360deg); } }
-@keyframes agrslide { 0% { width:15%; margin-left:0; } 50% { width:35%; margin-left:50%; } 100% { width:15%; margin-left:85%; } }
-"""
 
 # Build a theme where dark mode looks identical to light mode
 _theme = gr.themes.Default()
@@ -1650,7 +533,7 @@ with gr.Blocks(
             if show_polarity:
                 color_map = {"➕": "#d4fcd6", "➖": "#fcd6d6"}
             elif show_topic:
-                color_map = topic_color_map
+                color_map = TOPIC_COLOR_MAP
             elif show_consensuality:
                 color_map = None  # Continuous scale, no predefined colors
             else:
@@ -1828,25 +711,9 @@ with gr.Blocks(
                 
             # update color legend (topic or polarity)
             if show_polarity:
-                polarity_legend = (
-                    '<div style="display:flex;gap:12px;align-items:center;padding:8px 0;font-size:0.8em;">'
-                    '<span style="background:#d4fcd6;padding:2px 8px;border-radius:4px;">Positive</span>'
-                    '<span style="background:#fcd6d6;padding:2px 8px;border-radius:4px;">Negative</span>'
-                    '<span style="color:#9ca3af;">Neutral (no highlight)</span>'
-                    '</div>'
-                )
-                topic_color_map_visibility = gr.update(visible=True, value=polarity_legend)
+                topic_color_map_visibility = gr.update(visible=True, value=POLARITY_LEGEND)
             elif show_topic:
-                legend_items = " ".join(
-                    f'<span style="background:{color};padding:2px 8px;border-radius:4px;'
-                    f'font-size:0.8em;margin-right:4px;">{_html.escape(name)}</span>'
-                    for name, color in _TOPIC_HTML_COLORS.items()
-                )
-                topic_legend_html = (
-                    f'<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;'
-                    f'padding:8px 0;">{legend_items}</div>'
-                )
-                topic_color_map_visibility = gr.update(visible=True, value=topic_legend_html)
+                topic_color_map_visibility = gr.update(visible=True, value=TOPIC_LEGEND)
             else:
                 topic_color_map_visibility = gr.update(visible=False, value="")
 
@@ -1855,10 +722,10 @@ with gr.Blocks(
                 rebuttal_html
                 for _, rebuttal_html in review_items_cache
             )
-            toggle_buttons = [_review_toggle_html()]
+            toggle_buttons = [review_toggle_html()]
             if has_any_rebuttal:
-                toggle_buttons.append(_rebuttal_toggle_html())
-            jump_html = _jump_buttons_html(number_of_displayed_reviews, prefix="pre")
+                toggle_buttons.append(rebuttal_toggle_html())
+            jump_html = jump_buttons_html(number_of_displayed_reviews, prefix="pre")
             toggle_bar_html = (
                 '<div style="display:flex;align-items:center;gap:8px;">'
                 f'<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
@@ -1923,48 +790,14 @@ with gr.Blocks(
         topic_text_box = gr.HTML(visible=False, value="")
         
         prep_toggle_bar = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-1"></div>', elem_classes=["review-anchor"])
-        review1 = gr.HighlightedText(show_legend=False, label="📝 Review 1", visible=number_of_displayed_reviews >= 1, key="initial_review1")
-        prep_agreement1 = gr.HTML(visible=False, value="")
-        prep_rebuttal1 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-2"></div>', elem_classes=["review-anchor"])
-        review2 = gr.HighlightedText(show_legend=False, label="📝 Review 2", visible=number_of_displayed_reviews >= 2, key="initial_review2")
-        prep_agreement2 = gr.HTML(visible=False, value="")
-        prep_rebuttal2 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-3"></div>', elem_classes=["review-anchor"])
-        review3 = gr.HighlightedText(show_legend=False, label="📝 Review 3", visible=number_of_displayed_reviews >= 3, key="initial_review3")
-        prep_agreement3 = gr.HTML(visible=False, value="")
-        prep_rebuttal3 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-4"></div>', elem_classes=["review-anchor"])
-        review4 = gr.HighlightedText(show_legend=False, label="📝 Review 4", visible=number_of_displayed_reviews >= 4, key="initial_review4")
-        prep_agreement4 = gr.HTML(visible=False, value="")
-        prep_rebuttal4 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-5"></div>', elem_classes=["review-anchor"])
-        review5 = gr.HighlightedText(show_legend=False, label="📝 Review 5", visible=number_of_displayed_reviews >= 5, key="initial_review5")
-        prep_agreement5 = gr.HTML(visible=False, value="")
-        prep_rebuttal5 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-6"></div>', elem_classes=["review-anchor"])
-        review6 = gr.HighlightedText(show_legend=False, label="📝 Review 6", visible=number_of_displayed_reviews >= 6, key="initial_review6")
-        prep_agreement6 = gr.HTML(visible=False, value="")
-        prep_rebuttal6 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-7"></div>', elem_classes=["review-anchor"])
-        review7 = gr.HighlightedText(show_legend=False, label="📝 Review 7", visible=number_of_displayed_reviews >= 7, key="initial_review7")
-        prep_agreement7 = gr.HTML(visible=False, value="")
-        prep_rebuttal7 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-8"></div>', elem_classes=["review-anchor"])
-        review8 = gr.HighlightedText(show_legend=False, label="📝 Review 8", visible=number_of_displayed_reviews >= 8, key="initial_review8")
-        prep_agreement8 = gr.HTML(visible=False, value="")
-        prep_rebuttal8 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-9"></div>', elem_classes=["review-anchor"])
-        review9 = gr.HighlightedText(show_legend=False, label="📝 Review 9", visible=number_of_displayed_reviews >= 9, key="initial_review9")
-        prep_agreement9 = gr.HTML(visible=False, value="")
-        prep_rebuttal9 = gr.HTML(visible=False, value="")
-        gr.HTML(value='<div id="pre-review-anchor-10"></div>', elem_classes=["review-anchor"])
-        review10 = gr.HighlightedText(show_legend=False, label="📝 Review 10", visible=number_of_displayed_reviews >= 10, key="initial_review10")
-        prep_agreement10 = gr.HTML(visible=False, value="")
-        prep_rebuttal10 = gr.HTML(visible=False, value="")
-
-        # General rebuttal section (for rebuttals not tied to specific reviews)
+        prep_reviews = []
+        prep_agreements = []
+        prep_rebuttals = []
+        for _i in range(MAX_PREPROCESSED_REVIEWS):
+            gr.HTML(value=f'<div id="pre-review-anchor-{_i+1}"></div>', elem_classes=["review-anchor"])
+            prep_reviews.append(gr.HighlightedText(show_legend=False, label=f"📝 Review {_i+1}", visible=number_of_displayed_reviews >= _i+1, key=f"initial_review{_i+1}"))
+            prep_agreements.append(gr.HTML(visible=False, value=""))
+            prep_rebuttals.append(gr.HTML(visible=False, value=""))
         prep_general_rebuttal = gr.HTML(visible=False, value="")
 
         # Callback functions that update state.
@@ -1988,7 +821,7 @@ with gr.Blocks(
             return update_review_display(state, score_type)
 
         # Hook up the callbacks with the session state.
-        _review_outputs = [review_id, review1, review2, review3, review4, review5, review6, review7, review8, review9, review10, prep_agreement1, prep_agreement2, prep_agreement3, prep_agreement4, prep_agreement5, prep_agreement6, prep_agreement7, prep_agreement8, prep_agreement9, prep_agreement10, most_common_sentences, most_unique_sentences, topic_text_box, prep_toggle_bar, prep_rebuttal1, prep_rebuttal2, prep_rebuttal3, prep_rebuttal4, prep_rebuttal5, prep_rebuttal6, prep_rebuttal7, prep_rebuttal8, prep_rebuttal9, prep_rebuttal10, prep_general_rebuttal, state]
+        _review_outputs = [review_id, *prep_reviews, *prep_agreements, most_common_sentences, most_unique_sentences, topic_text_box, prep_toggle_bar, *prep_rebuttals, prep_general_rebuttal, state]
         year.change(fn=year_change, inputs=[year, state, score_type], outputs=_review_outputs)
         score_type.change(fn=update_review_display, inputs=[state, score_type], outputs=_review_outputs)
         next_button.click(fn=next_review, inputs=[state, score_type], outputs=_review_outputs)
@@ -2072,53 +905,18 @@ with gr.Blocks(
 
             interactive_rebuttal_toggle = gr.HTML(visible=False, value="")
 
-            # Review 1 (all display modes as HTML + rebuttal)
-            gr.HTML(value='<div id="int-review-anchor-1"></div>', elem_classes=["review-anchor"])
-            none_text1 = gr.HTML(visible=True, value="", elem_id="int-review-1")
-            agreement_text1 = gr.HTML(visible=False, value="")
-            polarity_text1 = gr.HTML(visible=False, value="")
-            topic_text1 = gr.HTML(visible=False, value="")
-            rebuttal_for_review1 = gr.HTML(visible=False, value="")
-
-            # Review 2
-            gr.HTML(value='<div id="int-review-anchor-2"></div>', elem_classes=["review-anchor"])
-            none_text2 = gr.HTML(visible=False, value="", elem_id="int-review-2")
-            agreement_text2 = gr.HTML(visible=False, value="")
-            polarity_text2 = gr.HTML(visible=False, value="")
-            topic_text2 = gr.HTML(visible=False, value="")
-            rebuttal_for_review2 = gr.HTML(visible=False, value="")
-
-            # Review 3
-            gr.HTML(value='<div id="int-review-anchor-3"></div>', elem_classes=["review-anchor"])
-            none_text3 = gr.HTML(visible=False, value="", elem_id="int-review-3")
-            agreement_text3 = gr.HTML(visible=False, value="")
-            polarity_text3 = gr.HTML(visible=False, value="")
-            topic_text3 = gr.HTML(visible=False, value="")
-            rebuttal_for_review3 = gr.HTML(visible=False, value="")
-
-            # Review 4
-            gr.HTML(value='<div id="int-review-anchor-4"></div>', elem_classes=["review-anchor"])
-            none_text4 = gr.HTML(visible=False, value="", elem_id="int-review-4")
-            agreement_text4 = gr.HTML(visible=False, value="")
-            polarity_text4 = gr.HTML(visible=False, value="")
-            topic_text4 = gr.HTML(visible=False, value="")
-            rebuttal_for_review4 = gr.HTML(visible=False, value="")
-
-            # Review 5
-            gr.HTML(value='<div id="int-review-anchor-5"></div>', elem_classes=["review-anchor"])
-            none_text5 = gr.HTML(visible=False, value="", elem_id="int-review-5")
-            agreement_text5 = gr.HTML(visible=False, value="")
-            polarity_text5 = gr.HTML(visible=False, value="")
-            topic_text5 = gr.HTML(visible=False, value="")
-            rebuttal_for_review5 = gr.HTML(visible=False, value="")
-
-            # Review 6
-            gr.HTML(value='<div id="int-review-anchor-6"></div>', elem_classes=["review-anchor"])
-            none_text6 = gr.HTML(visible=False, value="", elem_id="int-review-6")
-            agreement_text6 = gr.HTML(visible=False, value="")
-            polarity_text6 = gr.HTML(visible=False, value="")
-            topic_text6 = gr.HTML(visible=False, value="")
-            rebuttal_for_review6 = gr.HTML(visible=False, value="")
+            none_texts = []
+            agreement_texts = []
+            polarity_texts = []
+            topic_texts = []
+            rebuttal_for_reviews = []
+            for _i in range(MAX_INTERACTIVE_REVIEWS):
+                gr.HTML(value=f'<div id="int-review-anchor-{_i+1}"></div>', elem_classes=["review-anchor"])
+                none_texts.append(gr.HTML(visible=(_i == 0), value="", elem_id=f"int-review-{_i+1}"))
+                agreement_texts.append(gr.HTML(visible=False, value=""))
+                polarity_texts.append(gr.HTML(visible=False, value=""))
+                topic_texts.append(gr.HTML(visible=False, value=""))
+                rebuttal_for_reviews.append(gr.HTML(visible=False, value=""))
 
             # General rebuttal display (for rebuttals not tied to specific reviews)
             interactive_rebuttal_display = gr.HTML(visible=False, value="")
@@ -2136,27 +934,49 @@ with gr.Blocks(
         # State to hold RSA computation results for async updates
         rsa_computation_state = gr.State({})
 
-        # Sink states: absorb none_textN outputs from process_interactive_reviews_fast
+        # Sink states: absorb none_text outputs from process_interactive_reviews_fast
         # (none_texts are already set by _show_raw_and_switch; routing them to states
         #  prevents Gradio from showing a "pending" loading spinner on the review cards)
-        _none_sinks = [gr.State(None) for _ in range(6)]
+        _none_sinks = [gr.State(None) for _ in range(MAX_INTERACTIVE_REVIEWS)]
 
         _interactive_outputs = [
-            *_none_sinks,  # absorb none_text1..6 — already populated, no spinner wanted
-            agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+            *_none_sinks,         # absorb none_texts — already populated, no spinner wanted
+            *agreement_texts,
             most_common, most_divergent,
-            polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
-            topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
+            *polarity_texts,
+            *topic_texts,
             interactive_review_count,
             rsa_computation_state,
         ]
 
         # Outputs for RSA async computation (updates agreement sections + most common/unique)
         _rsa_outputs = [
-            agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
+            *agreement_texts,
             most_common, most_divergent,
             agreement_progress_html,
             focus_radio,
+        ]
+
+        # Outputs for _show_raw_and_switch (shared by fetch and submit chains)
+        _show_raw_outputs = [
+            *none_texts,
+            input_section, results_section, back_to_input_btn, paper_title, view_results_btn, focus_radio,
+            polarity_progress_html, agreement_progress_html,
+            interactive_rebuttal_toggle,
+            *rebuttal_for_reviews,
+            interactive_rebuttal_display, interactive_review_count,
+            interactive_rebuttal_state, interactive_legend_html,
+            processing_thread_state,
+        ]
+
+        # Outputs for toggle_display_mode (shared across focus_radio.change and end-of-chain calls)
+        _toggle_outputs = [
+            *none_texts,
+            *polarity_texts,
+            *topic_texts,
+            *agreement_texts,
+            most_divergent, most_common,
+            interactive_legend_html,
         ]
 
         # Fetch OpenReview reviews → show timer → fast process → swap to results → async RSA
@@ -2199,13 +1019,13 @@ with gr.Blocks(
             has_any = has_per_review or bool(general_formatted)
 
             # Toggle bar
-            right_buttons = [_review_toggle_html()]
+            right_buttons = [review_toggle_html()]
             if has_any:
-                right_buttons.append(_rebuttal_toggle_html())
+                right_buttons.append(rebuttal_toggle_html())
             toggle_bar = (
                 '<div style="display:flex;align-items:center;gap:8px;">'
                 '<span style="font-size:0.78em;color:#6b7280;white-space:nowrap;">Jump to:</span>'
-                + _jump_buttons_html(active_count)
+                + jump_buttons_html(active_count)
                 + '<span style="flex:1;"></span>'
                 + "".join(right_buttons) + '</div>'
             )
@@ -2290,9 +1110,9 @@ with gr.Blocks(
 
             # Color legend
             if effective_focus == "Polarity":
-                updates.append(gr.update(visible=True, value=_POLARITY_LEGEND))
+                updates.append(gr.update(visible=True, value=POLARITY_LEGEND))
             elif effective_focus == "Topic":
-                updates.append(gr.update(visible=True, value=_TOPIC_LEGEND))
+                updates.append(gr.update(visible=True, value=TOPIC_LEGEND))
             else:
                 updates.append(gr.update(visible=False, value=""))
 
@@ -2319,15 +1139,7 @@ with gr.Blocks(
             fn=_show_raw_and_switch,
             inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
                     openreview_rebuttal, openreview_title],
-            outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                     input_section, results_section, back_to_input_btn, paper_title, view_results_btn, focus_radio,
-                     polarity_progress_html, agreement_progress_html,
-                     interactive_rebuttal_toggle,
-                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
-                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state, interactive_legend_html,
-                     processing_thread_state]
+            outputs=_show_raw_outputs
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2342,14 +1154,7 @@ with gr.Blocks(
         ).success(
             fn=toggle_display_mode,
             inputs=[focus_radio, interactive_review_count],
-            outputs=[
-                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
-                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
-                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
-                most_divergent, most_common,
-                interactive_legend_html,
-            ]
+            outputs=_toggle_outputs
         ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
@@ -2369,15 +1174,7 @@ with gr.Blocks(
             fn=_show_raw_and_switch,
             inputs=[review1_textbox, review2_textbox, review3_textbox, review4_textbox, review5_textbox, review6_textbox,
                     paste_rebuttal, no_title_state],
-            outputs=[none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                     input_section, results_section, back_to_input_btn, paper_title, view_results_btn, focus_radio,
-                     polarity_progress_html, agreement_progress_html,
-                     interactive_rebuttal_toggle,
-                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
-                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, interactive_review_count,
-                     interactive_rebuttal_state, interactive_legend_html,
-                     processing_thread_state]
+            outputs=_show_raw_outputs
         ).success(
             fn=process_interactive_reviews_fast,
             inputs=_interactive_inputs,
@@ -2392,14 +1189,7 @@ with gr.Blocks(
         ).success(
             fn=toggle_display_mode,
             inputs=[focus_radio, interactive_review_count],
-            outputs=[
-                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
-                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
-                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
-                most_divergent, most_common,
-                interactive_legend_html,
-            ]
+            outputs=_toggle_outputs
         ).success(
             fn=lambda: gr.update(interactive=True),
             inputs=[],
@@ -2439,12 +1229,15 @@ with gr.Blocks(
         # Clear button
         clear_button.click(
             fn=lambda: (
-                "", "", "", "", "", "",                          # clear all textboxes
-                "",                                              # clear paste_rebuttal
-                3,                                               # reset count
-                "", "",                                          # clear most common/divergent
-                *([""] * 6), *([""] * 6), *([""] * 6), *([""] * 6),   # clear all output panels (none, agree, polar, topic)
-                {},                                              # reset rsa_computation_state
+                "", "", "", "", "", "",                       # clear all textboxes
+                "",                                           # clear paste_rebuttal
+                3,                                            # reset count
+                "", "",                                       # clear most common/divergent
+                *([""] * MAX_INTERACTIVE_REVIEWS),            # none_texts
+                *([""] * MAX_INTERACTIVE_REVIEWS),            # agreement_texts
+                *([""] * MAX_INTERACTIVE_REVIEWS),            # polarity_texts
+                *([""] * MAX_INTERACTIVE_REVIEWS),            # topic_texts
+                {},                                           # reset rsa_computation_state
             ),
             inputs=[],
             outputs=[
@@ -2452,61 +1245,33 @@ with gr.Blocks(
                 paste_rebuttal,
                 interactive_review_count,
                 most_common, most_divergent,
-                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
-                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
-                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
+                *none_texts, *agreement_texts, *polarity_texts, *topic_texts,
                 rsa_computation_state,
             ]
         ).then(
             fn=lambda: (
                 gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),  # review4-6
-                gr.update(visible=False, value=""),  # rebuttal toggle
-                gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 1-3
-                gr.update(visible=False, value=""), gr.update(visible=False, value=""), gr.update(visible=False, value=""),  # per-review rebuttals 4-6
+                gr.update(visible=False, value=""),                                             # rebuttal toggle
+                *[gr.update(visible=False, value="") for _ in range(MAX_INTERACTIVE_REVIEWS)], # per-review rebuttals
                 gr.update(visible=False, value=""),  # consolidated rebuttal
                 gr.update(visible=False, value=""),  # paper_title
                 gr.update(visible=False, value=""),  # polarity_progress_html
                 gr.update(visible=False, value=""),  # agreement_progress_html
             ),
             inputs=[],
-            outputs=[review4_textbox, review5_textbox, review6_textbox,
-                     interactive_rebuttal_toggle,
-                     rebuttal_for_review1, rebuttal_for_review2, rebuttal_for_review3,
-                     rebuttal_for_review4, rebuttal_for_review5, rebuttal_for_review6,
-                     interactive_rebuttal_display, paper_title,
-                     polarity_progress_html, agreement_progress_html]
-        )
-
-        # Color legend HTML snippets for polarity/topic modes
-        _POLARITY_LEGEND = (
-            '<div style="display:flex;gap:12px;align-items:center;padding:8px 0;font-size:0.8em;">'
-            '<span style="background:#d4fcd6;padding:2px 8px;border-radius:4px;">Positive</span>'
-            '<span style="background:#fcd6d6;padding:2px 8px;border-radius:4px;">Negative</span>'
-            '<span style="color:#9ca3af;">Neutral (no highlight)</span>'
-            '</div>'
-        )
-        _TOPIC_LEGEND = (
-            '<div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:8px 0;">'
-            + " ".join(
-                f'<span style="background:{color};padding:2px 8px;border-radius:4px;'
-                f'font-size:0.8em;margin-right:4px;">{_html.escape(name)}</span>'
-                for name, color in _TOPIC_HTML_COLORS.items()
-            )
-            + '</div>'
+            outputs=[
+                review4_textbox, review5_textbox, review6_textbox,
+                interactive_rebuttal_toggle,
+                *rebuttal_for_reviews,
+                interactive_rebuttal_display, paper_title,
+                polarity_progress_html, agreement_progress_html,
+            ]
         )
 
         focus_radio.change(
             fn=toggle_display_mode,
             inputs=[focus_radio, interactive_review_count],
-            outputs=[
-                none_text1, none_text2, none_text3, none_text4, none_text5, none_text6,
-                polarity_text1, polarity_text2, polarity_text3, polarity_text4, polarity_text5, polarity_text6,
-                topic_text1, topic_text2, topic_text3, topic_text4, topic_text5, topic_text6,
-                agreement_text1, agreement_text2, agreement_text3, agreement_text4, agreement_text5, agreement_text6,
-                most_divergent, most_common,
-                interactive_legend_html,
-            ]
+            outputs=_toggle_outputs
         )
 
         # Add Review button: show next hidden textbox (reviews 4-6)

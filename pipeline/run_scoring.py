@@ -29,7 +29,6 @@ _dir = Path(__file__).resolve().parent
 sys.path[:0] = [str(_dir), str(_dir.parent)]
 
 from config import Config
-from dependencies.scoring_utils import find_available_years
 
 # Import scoring functions
 from preprocess_data import preprocess_reviews_with_rebuttals
@@ -192,9 +191,8 @@ def main():
     else:
         # Auto-detect from raw data if preprocessing will be run
         if not args.skip_preprocess:
-            from preprocess_data import find_available_years as find_raw_years
             raw_dir = Config.BASE_DIR / "data"
-            years = find_raw_years(raw_dir)
+            years = Config.find_available_years(raw_dir)
             if not years:
                 print("⚠️  No raw data found in data/")
                 print("   Run fetch_iclr_data.py first")
@@ -202,7 +200,7 @@ def main():
         else:
             # Auto-detect from preprocessed data if skipping preprocessing
             processed_dir = Config.BASE_DIR / "data" / "processed"
-            years = find_available_years(processed_dir)
+            years = Config.find_available_years(processed_dir)
             if not years:
                 print("⚠️  No preprocessed data found in data/processed/")
                 print("   Run preprocess_data.py first or remove --skip-preprocess")

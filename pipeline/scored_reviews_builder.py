@@ -1,28 +1,18 @@
 import sys
 import pandas as pd
-import nltk
 import ast
 from pathlib import Path
 from tqdm import tqdm
 import json
 
 _dir = Path(__file__).resolve().parent
-sys.path.insert(0, str(_dir))
-sys.path.insert(0, str(_dir.parent))
+sys.path[:0] = [str(_dir), str(_dir.parent)]
 
 from config import Config
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 
 BASE_DIR = Config.BASE_DIR
 
-# def tokenize_sentences(text: str) -> list:
-#     # same tokenization as in the original glimpse code
-#     text = text.replace('-----', '\n')
-#     sentences = nltk.sent_tokenize(text)
-#     sentences = [sentence for sentence in sentences if sentence != ""]
-#     return sentences        
-        
-        
 def _parse_rsa_distributions(scored_df: pd.DataFrame, review_id: str) -> dict:
     """
     Parse listener/speaker DataFrames from the GLIMPSE results CSV.
@@ -151,11 +141,6 @@ def preprocessed_scores(
                 if review_num < len(submission_reviews):
                     rebuttal_val = submission_reviews["rebuttal"].iloc[review_num]
                     rebuttal = str(rebuttal_val) if pd.notna(rebuttal_val) else ""
-                    # Debug output
-                    if review_id == "https://openreview.net/forum?id=ryxz8CVYDH":
-                        print(f"DEBUG: {review_id[:50]}... review #{review_num+1}/{len(submission_reviews)}")
-                        print(f"       rebuttal_val type: {type(rebuttal_val)}, notna: {pd.notna(rebuttal_val)}")
-                        print(f"       rebuttal length: {len(rebuttal)}")
 
         scored_sentences = {}
         for sentence in glimpse_tokenizer(review_text):

@@ -1,4 +1,3 @@
-from functools import cache
 from typing import List
 
 import numpy as np
@@ -200,19 +199,25 @@ class RSAReranking:
 
         return likelihood_matrix
 
-    @cache
     def S(self, t):
-        if t == 0:
-            return self.initial_speaker_probas
-        else:
-            listener = self.L(t - 1)
-            prod = listener * self.rationality # + self.initial_speaker_probas.sum(0, keepdim=True)
-            return torch.log_softmax(prod, dim=-1)
+        if not hasattr(self, '_S_cache'):
+            self._S_cache = {}
+        if t not in self._S_cache:
+            if t == 0:
+                self._S_cache[t] = self.initial_speaker_probas
+            else:
+                listener = self.L(t - 1)
+                prod = listener * self.rationality
+                self._S_cache[t] = torch.log_softmax(prod, dim=-1)
+        return self._S_cache[t]
 
-    @cache
     def L(self, t):
-        speaker = self.S(t)
-        return torch.log_softmax(speaker, dim=-2)
+        if not hasattr(self, '_L_cache'):
+            self._L_cache = {}
+        if t not in self._L_cache:
+            speaker = self.S(t)
+            self._L_cache[t] = torch.log_softmax(speaker, dim=-2)
+        return self._L_cache[t]
 
     def mk_listener_dataframe(self, t):
         self.initial_speaker_probas = self.likelihood_matrix()

@@ -17,7 +17,6 @@ sys.path[:0] = [str(_dir), str(_dir.parent)]
 from config import Config
 from dependencies.Glimpse_tokenizer import glimpse_tokenizer
 from dependencies.scoring_utils import (
-    find_available_years,
     load_topic_model,
     predict_batch,
     save_topic_results,
@@ -170,7 +169,7 @@ def main():
         years = [args.year]
     else:
         processed_dir = Config.BASE_DIR / "data" / "processed"
-        years = find_available_years(processed_dir)
+        years = Config.find_available_years(processed_dir)
         if not years:
             print("⚠️  No preprocessed data found in data/processed/")
             print("   Run preprocess_data.py first")

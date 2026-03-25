@@ -109,19 +109,6 @@ def preprocess_reviews_with_rebuttals(year: int,
     return True
 
 
-def find_available_years(data_dir: Path = None):
-    """Auto-detect years by scanning data directory for all_reviews_YYYY.csv files."""
-    if data_dir is None:
-        data_dir = BASE_DIR / "data"
-
-    years = []
-    for file in data_dir.glob("all_reviews_*.csv"):
-        match = re.search(r'all_reviews_(\d{4})\.csv', file.name)
-        if match:
-            years.append(int(match.group(1)))
-
-    return sorted(years)
-
 
 def main():
     """Preprocess all available years (auto-detected from data directory)."""
@@ -142,7 +129,7 @@ def main():
             print(f"✗ Failed to preprocess {args.year}")
     else:
         # Auto-detect and process all available years
-        available_years = find_available_years()
+        available_years = Config.find_available_years()
 
         if not available_years:
             print("⚠️  No data files found in data/ directory")

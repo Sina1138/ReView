@@ -11,25 +11,6 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 
-def find_available_years(data_dir: Path) -> list:
-    """
-    Auto-detect years by scanning data directory for all_reviews_*.csv files.
-    
-    Args:
-        data_dir: Path to directory containing processed review data
-        
-    Returns:
-        Sorted list of years found
-    """
-    years = []
-    if data_dir.exists():
-        for file in data_dir.glob("all_reviews_*.csv"):
-            match = re.search(r'all_reviews_(\d{4})\.csv', file.name)
-            if match:
-                years.append(int(match.group(1)))
-    
-    return sorted(years)
-
 
 def _local_model_available(model_dir: Path) -> bool:
     """Check if a local model directory has the required files."""
