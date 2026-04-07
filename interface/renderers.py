@@ -307,6 +307,25 @@ def format_common_themes(
             polarity_key = polarity if polarity else "neutral"
             topic_data[topic_key][polarity_key][r_idx].append(sent)
 
+    # --- RSA uniqueness filter: keep only common sentences ---
+    if uniqueness:
+        median_u = float(np.median(list(uniqueness.values())))
+        for topic in list(topic_data.keys()):
+            pol_dict = topic_data[topic]
+            for pol in list(pol_dict.keys()):
+                rev_dict = pol_dict[pol]
+                for r_idx in list(rev_dict.keys()):
+                    rev_dict[r_idx] = [
+                        s for s in rev_dict[r_idx]
+                        if uniqueness.get(s, 0.0) <= median_u
+                    ]
+                    if not rev_dict[r_idx]:
+                        del rev_dict[r_idx]
+                if not rev_dict:
+                    del pol_dict[pol]
+            if not pol_dict:
+                del topic_data[topic]
+
     # Filter to topics with ≥2 unique reviewers
     common_topics = []
     for topic, pol_dict in topic_data.items():
@@ -376,9 +395,14 @@ def format_common_themes(
         r_label = f"R{r_idx + 1}"
         if speaker and r_label in speaker:
             sp = speaker[r_label]
-            scored = [(s, sp.get(s, 0.0)) for s in sents]
-            scored.sort(key=lambda x: x[1], reverse=True)
+            scored = [
+                (s, sp.get(s, 0.0), -(uniqueness.get(s, 0.0) if uniqueness else 0.0))
+                for s in sents
+            ]
+            scored.sort(key=lambda x: (x[1], x[2]), reverse=True)
             return scored[0][0]
+        if uniqueness:
+            return min(sents, key=lambda s: uniqueness.get(s, 0.0))
         return sents[0]
 
     def _sent_row(sent, r_idx):
