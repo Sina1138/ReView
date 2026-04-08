@@ -100,8 +100,10 @@ def _get_context(sentence: str, sentence_lists: list):
 # ===== Toggle / navigation buttons =====
 
 def toggle_html(selector: str, text_when_all_open: str,
-                text_when_not_all_open: str, initial_label: str) -> str:
+                text_when_not_all_open: str, initial_label: str,
+                log_event: str = "") -> str:
     """Generate a toggle button for expanding/collapsing details elements."""
+    log_attr = f' data-log-event="{log_event}"' if log_event else ""
     return (
         '<button onclick="'
         f"let tab=this.closest('.tabitem')||this.closest('.gradio-container');"
@@ -111,6 +113,7 @@ def toggle_html(selector: str, text_when_all_open: str,
         "details.forEach(d=>d.open=!allOpen);"
         f"this.textContent=allOpen?'{text_when_all_open}':'{text_when_not_all_open}';"
         f'" style="{TOGGLE_BTN_STYLE}"'
+        f'{log_attr}'
         f'>{initial_label}</button>'
     )
 
@@ -119,14 +122,16 @@ def rebuttal_toggle_html() -> str:
     """Generate an Expand/Collapse All Responses toggle button with inline JS."""
     return toggle_html("details:not(.review-collapse)",
                        "Expand All Responses", "Collapse All Responses",
-                       "Expand All Responses")
+                       "Expand All Responses",
+                       log_event="rebuttal_toggle")
 
 
 def review_toggle_html() -> str:
     """Generate a Collapse/Expand All Reviews toggle button with inline JS."""
     return toggle_html("details.review-collapse",
                        "Expand All Reviews", "Collapse All Reviews",
-                       "Collapse All Reviews")
+                       "Collapse All Reviews",
+                       log_event="review_toggle")
 
 
 def jump_buttons_html(active_count: int, prefix: str = "int") -> str:
@@ -140,8 +145,10 @@ def jump_buttons_html(active_count: int, prefix: str = "int") -> str:
             f"if(el)el.scrollIntoView({{behavior:'smooth',block:'start'}});"
             f"}})()"
         )
+        payload_json = json.dumps({"review": i, "prefix": prefix}).replace('"', "&quot;")
         buttons.append(
             f'<button onclick="{js}" '
+            f'data-log-event="jump_button" data-log-payload="{payload_json}" '
             f'style="{TOGGLE_BTN_STYLE}font-weight:600;">'
             f'R{i}</button>'
         )

@@ -17,6 +17,9 @@ benchmark_cpu_optimizations/
 # paper submission files
 _paper/
 
+# Study interaction logs (JSONL files, not .gitkeep)
+study/interaction_logs/*.jsonl
+
 # ========================================================================
 
 .gradio/
@@ -390,3 +393,5 @@ data/DISAPERE_test.py
 *.sublime-project
 *.sublime-workspace
 validation/quick_check.py
+.codex
+study/ReView-Evaluation-Design (7).pdf
