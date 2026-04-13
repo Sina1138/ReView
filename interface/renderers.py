@@ -486,12 +486,11 @@ def format_common_themes(
             if pol not in pol_dict:
                 continue
             rev_dict = pol_dict[pol]
-            cnt = pol_counts.get(pol, 0)
             color = _pol_colors[pol]
             sub_header = (
                 f'<div style="font-size:0.78em;font-weight:600;color:{color};'
                 f'margin:4px 0 2px 0;">'
-                f'{_pol_labels[pol]} ({cnt} sentence{"s" if cnt != 1 else ""})</div>'
+                f'{_pol_labels[pol]}</div>'
             )
             rows = []
             for r_idx in sorted(rev_dict.keys()):
