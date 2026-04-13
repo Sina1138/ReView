@@ -601,17 +601,12 @@ def format_divergent_cards(
                 )
 
             polarity_norm = _normalize_polarity((polarity_map or {}).get(sent))
-            if polarity_norm == "positive":
+            if polarity_norm in ("positive", "negative"):
+                pol_color = "#22c55e" if polarity_norm == "positive" else "#ef4444"
+                pol_label = "Positive" if polarity_norm == "positive" else "Negative"
                 chips.append(
-                    '<span style="background:#dcfce7;color:#166534;padding:2px 6px;'
-                    'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
-                    '➕</span>'
-                )
-            elif polarity_norm == "negative":
-                chips.append(
-                    '<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;'
-                    'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
-                    '➖</span>'
+                    f'<span style="color:{pol_color};font-size:0.78em;font-weight:600;'
+                    f'display:inline-block;align-self:center;">{pol_label}</span>'
                 )
 
             chip_row = (
