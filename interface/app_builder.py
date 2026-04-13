@@ -436,6 +436,7 @@ def build_review_app(config: StudyConfig) -> gr.Blocks:
                 if show_consensuality and prep_listener and prep_speaker and consensuality_dict:
                     divergent_per_review = format_divergent_cards(
                         consensuality_dict, review_sentence_lists, prep_listener, prep_speaker,
+                        polarity_map=prep_polarity_map, topic_map=prep_topic_map,
                     )
 
                 for i in range(MAX_PREPROCESSED_REVIEWS):
@@ -1121,7 +1122,10 @@ def build_review_app(config: StudyConfig) -> gr.Blocks:
                 )
 
                 if uniqueness:
-                    divergent_per_review = format_divergent_cards(uniqueness, sentence_lists, listener_map, speaker_map)
+                    divergent_per_review = format_divergent_cards(
+                        uniqueness, sentence_lists, listener_map, speaker_map,
+                        polarity_map=polarity_map, topic_map=topic_map,
+                    )
                 else:
                     divergent_per_review = {}
 

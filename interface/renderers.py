@@ -525,6 +525,8 @@ def format_divergent_cards(
     sentence_lists: list,
     listener: dict,
     speaker: dict,
+    polarity_map: Optional[dict] = None,
+    topic_map: Optional[dict] = None,
 ) -> Dict[int, str]:
     """Most Divergent Opinions — returns per-review HTML dict {review_index: html}."""
     if not uniqueness or not listener or not speaker:
@@ -583,8 +585,39 @@ def format_divergent_cards(
                 dom_pct = int(round(max(listener[sent].values(), default=0.0) * 100))
             uniqueness_badge = (
                 f'<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;'
-                f'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;margin-bottom:3px;">'
+                f'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
                 f'{dom_pct}% listener share</span>'
+            )
+
+            chips = [uniqueness_badge]
+
+            topic_label = (topic_map or {}).get(sent)
+            if topic_label and topic_label != "NONE" and topic_label in TOPIC_HTML_COLORS:
+                topic_bg = TOPIC_HTML_COLORS[topic_label]
+                chips.append(
+                    f'<span style="background:{topic_bg};color:#1f2937;padding:2px 6px;'
+                    f'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
+                    f'{_html.escape(topic_label)}</span>'
+                )
+
+            polarity_norm = _normalize_polarity((polarity_map or {}).get(sent))
+            if polarity_norm == "positive":
+                chips.append(
+                    '<span style="background:#dcfce7;color:#166534;padding:2px 6px;'
+                    'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
+                    '➕</span>'
+                )
+            elif polarity_norm == "negative":
+                chips.append(
+                    '<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;'
+                    'border-radius:4px;font-size:0.7em;font-weight:600;display:inline-block;">'
+                    '➖</span>'
+                )
+
+            chip_row = (
+                f'<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:3px;">'
+                + "".join(chips)
+                + '</div>'
             )
 
             onclick = click_to_scroll_js(sent_id, "#ef4444")
@@ -596,7 +629,7 @@ def format_divergent_cards(
                 f'<div style="border:1px solid #e5e7eb;border-left:3px solid {border_color};'
                 f'border-radius:6px;padding:8px 12px;margin-bottom:5px;cursor:pointer;" '
                 f'onclick="{_html.escape(onclick)}">'
-                f'{uniqueness_badge}'
+                f'{chip_row}'
                 f'<div style="color:#111827;line-height:1.5;">'
                 f'{before_span}'
                 f'<span style="font-weight:500;">{_html.escape(sent)}</span>'
